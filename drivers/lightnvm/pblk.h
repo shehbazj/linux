@@ -992,7 +992,6 @@ static inline void *emeta_to_wa(struct pblk_line_meta *lm,
 
 static inline void *emeta_to_lbas(struct pblk *pblk, struct line_emeta *emeta)
 {
-	pr_info("%s():%d\n",__func__, pblk->lm.emeta_len[1]);
 	return ((void *)emeta + pblk->lm.emeta_len[1]);
 }
 

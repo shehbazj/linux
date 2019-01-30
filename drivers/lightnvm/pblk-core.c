@@ -685,26 +685,28 @@ void find_next_zero_bit_same_lun(const unsigned long*addr, int total_size, int c
 {
 	int i;
 	int stripe_length = total_luns * nr_secs; // 32
+	int curr_offset_base;
 	int rem;
 	for ( i = 0 ; i < num_req_sectors ; i++) {
 		curr_offset = find_next_zero_bit(addr, total_size, line->cur_secs[curr_lun]);
-		pr_info("curr_offset = %d ", curr_offset);
+		//pr_info("curr_offset = %d ", curr_offset);
 		if ( (curr_offset % (total_luns * nr_secs) <  (nr_secs * (curr_lun + 1)))
 			&& (curr_offset % (total_luns * nr_secs) >= (nr_secs * (curr_lun))) )
 		{
-			pr_info(" belongs to current lun %d\n", curr_lun);
+		//	pr_info(" belongs to current lun %d\n", curr_lun);
 			paddr_list[i] = curr_offset;
 			line->cur_secs[curr_lun] = curr_offset;
 			WARN_ON(test_and_set_bit(line->cur_secs[curr_lun]++, line->map_bitmap));
 		}else {
-			curr_offset = ((div_u64_rem(curr_offset, stripe_length, &rem)) * stripe_length)
-						+ (stripe_length + (curr_lun * nr_secs));
-			pr_info(" didnt belong to current lun, updated to %d for lun %d\n", curr_offset, curr_lun);
+			curr_offset_base = ((div_u64_rem(curr_offset, stripe_length, &rem)) * stripe_length)
+						+ (curr_lun * nr_secs);
+			curr_offset = (curr_offset_base > curr_offset) ? curr_offset_base : curr_offset_base + (stripe_length);
+		//	pr_info(" didnt belong to current lun, updated to %d for lun %d\n", curr_offset, curr_lun);
 			paddr_list[i] = curr_offset;
 			line->cur_secs[curr_lun] = curr_offset;
 			WARN_ON(test_and_set_bit(line->cur_secs[curr_lun]++, line->map_bitmap));
 		}
-		pr_info("%s(): paddr = %llu\n",__func__,paddr_list[i]);
+		//pr_info("%s(): paddr = %llu\n",__func__,paddr_list[i]);
 	}
 }
 
@@ -726,7 +728,7 @@ void __pblk_alloc_page_data(struct pblk *pblk, struct pblk_line *line, int *nr_s
 	// check if cur_secs for lun + nr_secs does not exceed total sectors
 	// allocated to the lun
 	for (lun = 0 ; lun < total_luns ; lun++) {
-		pr_info("%s(): allocating %d secs for lun %d\n",__func__,nr_secs_per_lun[lun],lun);
+//		pr_info("%s(): allocating %d secs for lun %d\n",__func__,nr_secs_per_lun[lun],lun);
 		if ( ((line->cur_secs[lun] / total_luns) + ((line->cur_secs[lun] % total_luns)  + nr_secs))
 					> pblk->lm.sec_per_line_per_lun)
 		{

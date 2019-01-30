@@ -83,7 +83,7 @@ static int pblk_map_page_data(struct pblk *pblk, unsigned int sentry,
 	for (i = 0 ; i < valid_secs ; i++) {
 		w_ctx = pblk_rb_w_ctx(&pblk->rwb, sentry + i);
 		all_lbas[i] = cpu_to_le64(w_ctx->lba);
-		pr_info("%s():mapping lba %llu\n", __func__,all_lbas[i]);
+//		pr_info("%s():mapping lba %llu\n", __func__,all_lbas[i]);
 	}
 
 	// nr_secs = min write pages = 8
