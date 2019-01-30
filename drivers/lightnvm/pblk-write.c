@@ -310,11 +310,15 @@ static int pblk_alloc_w_rq(struct pblk *pblk, struct nvm_rq *rqd,
 	return pblk_alloc_rqd_meta(pblk, rqd);
 }
 
+
 static int pblk_setup_w_rq(struct pblk *pblk, struct nvm_rq *rqd,
 			   struct ppa_addr *erase_ppa)
 {
 	struct pblk_line_meta *lm = &pblk->lm;
+	// e_line is the erase line. by default we erase the line
+	// before writing data to it. it is usually the next line
 	struct pblk_line *e_line = pblk_line_get_erase(pblk);
+	// write buffer completion context
 	struct pblk_c_ctx *c_ctx = nvm_rq_to_pdu(rqd);
 	unsigned int valid = c_ctx->nr_valid;
 	unsigned int padded = c_ctx->nr_padded;
@@ -327,18 +331,31 @@ static int pblk_setup_w_rq(struct pblk *pblk, struct nvm_rq *rqd,
 		return -ENOMEM;
 	c_ctx->lun_bitmap = lun_bitmap;
 
+	// allocate metadata for writing blocks.
+	// rqd structure gets initialized with nr_secs and 
+	// endio write function call.
 	ret = pblk_alloc_w_rq(pblk, rqd, nr_secs, pblk_end_io_write);
 	if (ret) {
 		kfree(lun_bitmap);
 		return ret;
 	}
 
-	if (likely(!e_line || !atomic_read(&e_line->left_eblks)))
+	// valid = secs available. sentry = old subm
+	if (likely(!e_line || !atomic_read(&e_line->left_eblks))) {
+		// if erase line is not null and there are 0 sectors currently
+		// in the erased line, map the blocks to be written here.
+		// sentry - rb->smem offset. valid - number of sectors to be mapped.
+		// create a mapping between write context ppas and lbas
+		// 0 - everything went well. -ENOSPC - could not map data.
+		// address generation from the cache line to the actual
+		// device physical address takes place here....
 		ret = pblk_map_rq(pblk, rqd, c_ctx->sentry, lun_bitmap,
 							valid, 0);
-	else
+	} else {
+		// if erase line is not erased yet, erase current blocks
 		ret = pblk_map_erase_rq(pblk, rqd, c_ctx->sentry, lun_bitmap,
 							valid, erase_ppa);
+	}
 
 	return ret;
 }
@@ -503,6 +520,7 @@ static struct pblk_line *pblk_should_submit_meta_io(struct pblk *pblk,
 	return meta_line;
 }
 
+/* the mapping was already created in */
 static int pblk_submit_io_set(struct pblk *pblk, struct nvm_rq *rqd)
 {
 	struct ppa_addr erase_ppa;
@@ -512,12 +530,17 @@ static int pblk_submit_io_set(struct pblk *pblk, struct nvm_rq *rqd)
 	pblk_ppa_set_empty(&erase_ppa);
 
 	/* Assign lbas to ppas and populate request structure */
+	// w_ctx is now populated with the lba-> device ppa mapping.
+	// device ppa mapping has been generated using the original
+	// cache address and the line->id.
+
 	err = pblk_setup_w_rq(pblk, rqd, &erase_ppa);
 	if (err) {
 		pblk_err(pblk, "could not setup write request: %d\n", err);
 		return NVM_IO_ERR;
 	}
 
+	// returns you a metadata line.
 	meta_line = pblk_should_submit_meta_io(pblk, rqd);
 
 	/* Submit data write for current data line */
@@ -602,14 +625,19 @@ static int pblk_submit_write(struct pblk *pblk, int *secs_left)
 		 * flushes (bios without data) will be cleared on
 		 * the cache threads
 		 */
+		// difference between mem and subm
 		secs_avail = pblk_rb_read_count(&pblk->rwb);
 		if (!secs_avail)
 			return 0;
 
+		// returns difference between flush point (index until which 
+		// data has to be flushed) and subm (index until which data
+		// has been submitted to disk)
 		secs_to_flush = pblk_rb_flush_point_count(&pblk->rwb);
 		if (!secs_to_flush && secs_avail < pblk->min_write_pgs_data)
 			return 0;
 
+		// secs_to_sync = secs_available or max secs.
 		secs_to_sync = pblk_calc_secs_to_sync(pblk, secs_avail,
 					secs_to_flush);
 		if (secs_to_sync > pblk->max_write_pgs) {
@@ -617,8 +645,12 @@ static int pblk_submit_write(struct pblk *pblk, int *secs_left)
 			return 0;
 		}
 
+		// find min between sectors present in the buffer (mem-subm)
+		// and sectors to be flushed (mem-flush_point)
 		secs_to_com = (secs_to_sync > secs_avail) ?
 			secs_avail : secs_to_sync;
+		// updates subm pointer to point to subm + secs_to_commit
+		// pos is the old subm value
 		pos = pblk_rb_read_commit(&pblk->rwb, secs_to_com);
 	}
 
@@ -631,11 +663,18 @@ static int pblk_submit_write(struct pblk *pblk, int *secs_left)
 	rqd = pblk_alloc_rqd(pblk, PBLK_WRITE);
 	rqd->bio = bio;
 
+	// all bios are initialized with the rb buffer entry pages.
+	// appropriate amount of padding is added for mis-aligned secs_avail
+	// to match secs_to_sync.
 	if (pblk_rb_read_to_bio(&pblk->rwb, rqd, pos, secs_to_sync,
 								secs_avail)) {
 		pblk_err(pblk, "corrupted write bio\n");
 		goto fail_put_bio;
 	}
+
+	// rqd contains request for sectors to be written, a write context c_ctx
+	// is initialized to have sentry = old subm, valid secs = secs on the buffer
+	// and padded secs = pages to be padded.
 
 	if (pblk_submit_io_set(pblk, rqd))
 		goto fail_free_bio;
