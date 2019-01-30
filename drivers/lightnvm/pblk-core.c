@@ -222,7 +222,6 @@ static void pblk_invalidate_range(struct pblk *pblk, sector_t slba,
 				  unsigned int nr_secs)
 {
 	sector_t lba;
-
 	spin_lock(&pblk->trans_lock);
 	for (lba = slba; lba < slba + nr_secs; lba++) {
 		struct ppa_addr ppa;
@@ -656,6 +655,7 @@ void pblk_dealloc_page(struct pblk *pblk, struct pblk_line *line, int nr_secs)
 	spin_unlock(&line->lock);
 }
 
+// add another parameter that provides us PU in which lba needs to be written.
 u64 __pblk_alloc_page(struct pblk *pblk, struct pblk_line *line, int nr_secs)
 {
 	u64 addr;
@@ -669,12 +669,80 @@ u64 __pblk_alloc_page(struct pblk *pblk, struct pblk_line *line, int nr_secs)
 		nr_secs = pblk->lm.sec_per_line - line->cur_sec;
 	}
 
+	// addr is the next 0 sector in line->map_bitmap. instead, skip and 
+	// find the pa that corresponds to the PU in which current lba is to be mapped.
 	line->cur_sec = addr = find_next_zero_bit(line->map_bitmap,
 					pblk->lm.sec_per_line, line->cur_sec);
 	for (i = 0; i < nr_secs; i++, line->cur_sec++)
 		WARN_ON(test_and_set_bit(line->cur_sec, line->map_bitmap));
 
 	return addr;
+}
+
+/* wrapper for retriving next addr from the same lun */
+
+void find_next_zero_bit_same_lun(const unsigned long*addr, int total_size, int curr_offset, int total_luns, int num_req_sectors, u64*paddr_list, int nr_secs, int curr_lun, struct pblk_line *line)
+{
+	int i;
+	int stripe_length = total_luns * nr_secs; // 32
+	int rem;
+	for ( i = 0 ; i < num_req_sectors ; i++) {
+		curr_offset = find_next_zero_bit(addr, total_size, line->cur_secs[curr_lun]);
+		pr_info("curr_offset = %d ", curr_offset);
+		if ( (curr_offset % (total_luns * nr_secs) <  (nr_secs * (curr_lun + 1)))
+			&& (curr_offset % (total_luns * nr_secs) >= (nr_secs * (curr_lun))) )
+		{
+			pr_info(" belongs to current lun %d\n", curr_lun);
+			paddr_list[i] = curr_offset;
+			line->cur_secs[curr_lun] = curr_offset;
+			WARN_ON(test_and_set_bit(line->cur_secs[curr_lun]++, line->map_bitmap));
+		}else {
+			curr_offset = ((div_u64_rem(curr_offset, stripe_length, &rem)) * stripe_length)
+						+ (stripe_length + (curr_lun * nr_secs));
+			pr_info(" didnt belong to current lun, updated to %d for lun %d\n", curr_offset, curr_lun);
+			paddr_list[i] = curr_offset;
+			line->cur_secs[curr_lun] = curr_offset;
+			WARN_ON(test_and_set_bit(line->cur_secs[curr_lun]++, line->map_bitmap));
+		}
+		pr_info("%s(): paddr = %llu\n",__func__,paddr_list[i]);
+	}
+}
+
+void __pblk_alloc_page_data(struct pblk *pblk, struct pblk_line *line, int *nr_secs_per_lun, u64* paddr_list, int nr_secs)
+{
+	int lun;
+
+	struct nvm_tgt_dev *dev = pblk->dev;
+        struct nvm_geo *geo = &dev->geo;
+	int total_luns = geo->all_luns;
+	int nr_secs_curr_lun;
+	// keep incrementing sentry by nr_secs_curr_lun each time n number of luns are assigned to it
+	int sentry = 0;
+
+	BUG_ON(total_luns == 0);
+
+	lockdep_assert_held(&line->lock);
+
+	// check if cur_secs for lun + nr_secs does not exceed total sectors
+	// allocated to the lun
+	for (lun = 0 ; lun < total_luns ; lun++) {
+		pr_info("%s(): allocating %d secs for lun %d\n",__func__,nr_secs_per_lun[lun],lun);
+		if ( ((line->cur_secs[lun] / total_luns) + ((line->cur_secs[lun] % total_luns)  + nr_secs))
+					> pblk->lm.sec_per_line_per_lun)
+		{
+			WARN(1, "pblk: page allocation out of bounds\n");
+			nr_secs_per_lun[lun] = pblk->lm.sec_per_line_per_lun - line->cur_secs[lun];
+		}
+		
+		// addr is the next 0 sector in line->map_bitmap. instead, skip and
+		// find the pa that corresponds to the PU in which current lba is to be mapped.
+		nr_secs_curr_lun = nr_secs_per_lun[lun];
+		// update line->map_bitmap in find_next_zero_bit itself
+		find_next_zero_bit_same_lun(line->map_bitmap,
+				pblk->lm.sec_per_line, line->cur_secs[lun],
+				total_luns, nr_secs_curr_lun, paddr_list + sentry, nr_secs, lun, line);
+		sentry += nr_secs_curr_lun;
+	}
 }
 
 u64 pblk_alloc_page(struct pblk *pblk, struct pblk_line *line, int nr_secs)
@@ -691,6 +759,23 @@ u64 pblk_alloc_page(struct pblk *pblk, struct pblk_line *line, int nr_secs)
 	spin_unlock(&line->lock);
 
 	return addr;
+}
+
+// nr_secs_per_lun = list of number of sectors required per lun
+// paddr_list = empty list in which paddr for entire lun needs to be filled.
+// size of paddr_list = nr_secs = minimum write pages.
+// size of nr_secs_per_lun = number of luns.
+void pblk_alloc_page_data(struct pblk *pblk, struct pblk_line *line, int *nr_secs_per_lun, u64 *paddr_list)
+{
+	/* Lock needed in case a write fails and a recovery needs to remap
+	 * failed write buffer entries
+	 */
+	int nr_secs = 8;
+	spin_lock(&line->lock);
+	__pblk_alloc_page_data(pblk, line, nr_secs_per_lun, paddr_list, nr_secs);
+	line->left_msecs -= nr_secs;
+	WARN(line->left_msecs < 0, "pblk: page allocation out of bounds\n");
+	spin_unlock(&line->lock);
 }
 
 u64 pblk_lookup_page(struct pblk *pblk, struct pblk_line *line)
@@ -2029,22 +2114,25 @@ void pblk_update_map(struct pblk *pblk, sector_t lba, struct ppa_addr ppa)
 	spin_lock(&pblk->trans_lock);
 	ppa_l2p = pblk_trans_map_get(pblk, lba);
 
+	// invalidate already existing map if a physical device
+	// address is present.
 	if (!pblk_addr_in_cache(ppa_l2p) && !pblk_ppa_empty(ppa_l2p))
 		pblk_map_invalidate(pblk, ppa_l2p);
 
+	// set the lba to the cache's ppa address.
 	pblk_trans_map_set(pblk, lba, ppa);
 	spin_unlock(&pblk->trans_lock);
 }
 
 void pblk_update_map_cache(struct pblk *pblk, sector_t lba, struct ppa_addr ppa)
 {
-
 #ifdef CONFIG_NVM_PBLK_DEBUG
 	/* Callers must ensure that the ppa points to a cache address */
 	BUG_ON(!pblk_addr_in_cache(ppa));
 	BUG_ON(pblk_rb_pos_oob(&pblk->rwb, pblk_addr_to_cacheline(ppa)));
 #endif
-
+	// this function will map the lba to the cache lines ppa that
+	// was initialized during pblk_rb_init() function.
 	pblk_update_map(pblk, lba, ppa);
 }
 
