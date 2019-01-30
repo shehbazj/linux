@@ -232,9 +232,11 @@ static int __pblk_rb_update_l2p(struct pblk_rb *rb, unsigned int to_update)
 	int flags;
 
 	for (i = 0; i < to_update; i++) {
+		// start from entry whose mapping has not been updated yet.
+		// rb->l2p_update is updated after each map update.
 		entry = &rb->entries[rb->l2p_update];
 		w_ctx = &entry->w_ctx;
-
+		//pr_info("%s():ppa in w_ctx = %u, cacheline %d, pu %d\n", __func__,pblk_ppa64_to_ppa32(pblk,w_ctx->ppa), w_ctx->ppa.c.line, w_ctx->ppa.m.pu);
 		flags = READ_ONCE(entry->w_ctx.flags);
 		if (flags & PBLK_IOTYPE_USER)
 			user_io++;
@@ -243,6 +245,10 @@ static int __pblk_rb_update_l2p(struct pblk_rb *rb, unsigned int to_update)
 		else
 			WARN(1, "pblk: unknown IO type\n");
 
+		// if mapping exists already (update operation)
+		// update the l2pmap.
+		// cacheline is initialized in pblk_rb_init(). where
+		// ppa of cacheline is assigned sequentially from 0 onwards
 		pblk_update_map_dev(pblk, w_ctx->lba, w_ctx->ppa,
 							entry->cacheline);
 
@@ -271,12 +277,20 @@ static int pblk_rb_update_l2p(struct pblk_rb *rb, unsigned int nr_entries,
 	lockdep_assert_held(&rb->w_lock);
 
 	/* Update l2p only as buffer entries are being overwritten */
+	// this only checks if there is enough space. if enough space is present,
+	// return 0.
 	space = pblk_rb_ring_space(rb, mem, rb->l2p_update, rb->nr_entries);
 	if (space > nr_entries)
 		goto out;
 
+	// space = number of entries in buffer whose mapping isn't updated, yet
+	// count = number of writes to be done - number of mappings that aren't updated yet.
 	count = nr_entries - space;
 	/* l2p_update used exclusively under rb->w_lock */
+	// if the space to write the data is less than the nr_entries (number of 
+	// blocks to write), then count number of blocks (nr_entries - space) need
+	// to be freed to make space for new writes. this constitutes the "count"
+	// blocks.
 	ret = __pblk_rb_update_l2p(rb, count);
 
 out:
@@ -320,6 +334,7 @@ static void __pblk_rb_write_entry(struct pblk_rb *rb, void *data,
 	entry->w_ctx.ppa = w_ctx.ppa;
 }
 
+// ring_pos is the position on the ring buffer for which write has been issued.
 void pblk_rb_write_entry_user(struct pblk_rb *rb, void *data,
 			      struct pblk_w_ctx w_ctx, unsigned int ring_pos)
 {
@@ -334,8 +349,13 @@ void pblk_rb_write_entry_user(struct pblk_rb *rb, void *data,
 	BUG_ON(!(flags & PBLK_WRITABLE_ENTRY));
 #endif
 
+	// entry corresponds to one element of the ring buffer.
+	// w_ctx is null currently.
 	__pblk_rb_write_entry(rb, data, w_ctx, entry);
 
+//	pr_info("%s(): calling pblk_update_map_cache\n", __func__);
+	// lba in the entry is mapped to the ppa assigned to cache
+	// in pblk_rb_init function.
 	pblk_update_map_cache(pblk, w_ctx.lba, entry->cacheline);
 	flags = w_ctx.flags | PBLK_WRITTEN_DATA;
 
@@ -369,16 +389,25 @@ void pblk_rb_write_entry_gc(struct pblk_rb *rb, void *data,
 	smp_store_release(&entry->w_ctx.flags, flags);
 }
 
+// pos = number of blocks to be written. this function
+// is called when all write sanity checks have been performed
+// on the ring buffer.
+
+// return 0 will return NVM_IO done
+// return 1 will return NVM_IO_OK.
+
 static int pblk_rb_flush_point_set(struct pblk_rb *rb, struct bio *bio,
 				   unsigned int pos)
 {
 	struct pblk_rb_entry *entry;
 	unsigned int sync, flush_point;
 
+	// acquires the spin lock to read sync variable.
 	pblk_rb_sync_init(rb, NULL);
 	sync = READ_ONCE(rb->sync);
 
 	if (pos == sync) {
+		// nothing to flush, sync already done until next write position.
 		pblk_rb_sync_end(rb, NULL);
 		return 0;
 	}
@@ -388,6 +417,8 @@ static int pblk_rb_flush_point_set(struct pblk_rb *rb, struct bio *bio,
 #endif
 
 	flush_point = (pos == 0) ? (rb->nr_entries - 1) : (pos - 1);
+	// flush_point - either equal to nr_entries-1 or 1 element before pos.
+
 	entry = &rb->entries[flush_point];
 
 	/* Protect flush points */
@@ -401,6 +432,8 @@ static int pblk_rb_flush_point_set(struct pblk_rb *rb, struct bio *bio,
 	return bio ? 1 : 0;
 }
 
+// return 0 is bad, 1 is good.
+
 static int __pblk_rb_may_write(struct pblk_rb *rb, unsigned int nr_entries,
 			       unsigned int *pos)
 {
@@ -409,13 +442,25 @@ static int __pblk_rb_may_write(struct pblk_rb *rb, unsigned int nr_entries,
 	unsigned int threshold;
 
 	sync = READ_ONCE(rb->sync);
+	// here mem refers to the old mem before the data is actually written 
+	// to the rb cache.
 	mem = READ_ONCE(rb->mem);
 
 	threshold = nr_entries + rb->back_thres;
 
+	// minimum write size check - return 0 - requeue write
 	if (pblk_rb_ring_space(rb, mem, sync, rb->nr_entries) < threshold)
 		return 0;
 
+	// this is where mapping gets created from rb->l2p_update until nr_entries
+	// mapping is created using pblk in w_ctx of rb entries.
+	// mem still points to the old memory, before the actual write
+	// sync points to blocks that have been written to the disk and acknowledged
+	// 0 is good. non-zero is bad
+
+	// if enough space is not present, this function clears the rb by
+	// updating mapping of already written data to make space for the newly
+	// written data in the rb buffer.
 	if (pblk_rb_update_l2p(rb, nr_entries, mem, sync))
 		return 0;
 
@@ -446,12 +491,21 @@ void pblk_rb_flush(struct pblk_rb *rb)
 	pblk_write_kick(pblk);
 }
 
+// 0 return -> requeue IO
+// 1 return -> IO_OK or IO_DONE 
 static int pblk_rb_may_write_flush(struct pblk_rb *rb, unsigned int nr_entries,
 				   unsigned int *pos, struct bio *bio,
 				   int *io_ret)
 {
 	unsigned int mem;
 
+	// initializes pos to mem before the write operation.
+	// 0 is bad. requeue write.
+	// updates l2pmap of already written blocks in rb
+	// if there is not enough space to write to rb.
+	// else, returns WITHOUT writing anything to rb, but
+	// ensuring sufficient space is present in the ring
+	// buffer to make the update.
 	if (!__pblk_rb_may_write(rb, nr_entries, pos))
 		return 0;
 
@@ -462,6 +516,10 @@ static int pblk_rb_may_write_flush(struct pblk_rb *rb, unsigned int nr_entries,
 		struct pblk *pblk = container_of(rb, struct pblk, rwb);
 
 		atomic64_inc(&pblk->nr_flush);
+		// returns 1 updates flush point to 1 element before pos.
+		// io_ret is set to NVM_IO_OK.
+		// returns 0 if there is nothing to flush (flushpoint == pos)
+		// or if bio is null. io_ret is set to NVM_IO_DONE.
 		if (pblk_rb_flush_point_set(&pblk->rwb, bio, mem))
 			*io_ret = NVM_IO_OK;
 	}
@@ -477,6 +535,11 @@ static int pblk_rb_may_write_flush(struct pblk_rb *rb, unsigned int nr_entries,
  * incoming I/O, and (ii) the current I/O type has enough budget in the write
  * buffer (rate-limiter).
  */
+// nr_entries - writes to be done from bio. pos-> uninitialized at this point.
+
+// io_ret = NVM_IO_OK or NVM_IO_DONE if pblk_may_write_flush returns 1
+// io_ret = NVM_IO_REQUEUE if pblk_rb_may_write_flush returns 0.
+
 int pblk_rb_may_write_user(struct pblk_rb *rb, struct bio *bio,
 			   unsigned int nr_entries, unsigned int *pos)
 {
@@ -484,17 +547,22 @@ int pblk_rb_may_write_user(struct pblk_rb *rb, struct bio *bio,
 	int io_ret;
 
 	spin_lock(&rb->w_lock);
+	// rate limiter check - can nr_entries be written?
 	io_ret = pblk_rl_user_may_insert(&pblk->rl, nr_entries);
 	if (io_ret) {
 		spin_unlock(&rb->w_lock);
 		return io_ret;
 	}
-
+	// pos still uninitialized, nr_entries = number of sectors in bio
+	// updates flush to point to 1 item before the pos.
+	// nothing is written until now. bio is updated for flush point
+	// but nothing beyond that. no writes until now.
 	if (!pblk_rb_may_write_flush(rb, nr_entries, pos, bio, &io_ret)) {
 		spin_unlock(&rb->w_lock);
 		return NVM_IO_REQUEUE;
 	}
 
+	// update rate limiter so that GC does not affect user IO
 	pblk_rl_user_in(&pblk->rl, nr_entries);
 	spin_unlock(&rb->w_lock);
 
@@ -533,6 +601,10 @@ int pblk_rb_may_write_gc(struct pblk_rb *rb, unsigned int nr_entries,
  * This function is used by the write thread to form the write bio that will
  * persist data on the write buffer to the media.
  */
+
+// nr_entries = secs to sync
+// count = secs available
+
 unsigned int pblk_rb_read_to_bio(struct pblk_rb *rb, struct nvm_rq *rqd,
 				 unsigned int pos, unsigned int nr_entries,
 				 unsigned int count)
@@ -547,9 +619,11 @@ unsigned int pblk_rb_read_to_bio(struct pblk_rb *rb, struct nvm_rq *rqd,
 	unsigned int i;
 	int flags;
 
+	// nr_entries = secs_to_sync
+	// count = sectors available
 	if (count < nr_entries) {
 		pad = nr_entries - count;
-		to_read = count;
+		to_read = count;	// secs_avail
 	}
 
 	/* Add space for packed metadata if in use*/
@@ -559,6 +633,8 @@ unsigned int pblk_rb_read_to_bio(struct pblk_rb *rb, struct nvm_rq *rqd,
 	c_ctx->nr_valid = to_read;
 	c_ctx->nr_padded = pad;
 
+	// this loop goes over all valid entries from subm to mem
+	// add bio pages.
 	for (i = 0; i < to_read; i++) {
 		entry = &rb->entries[pos];
 
@@ -601,6 +677,7 @@ try:
 		pos = pblk_rb_ptr_wrap(rb, pos, 1);
 	}
 
+	// add bio pages for padding.
 	if (pad) {
 		if (pblk_bio_add_pages(pblk, bio, GFP_KERNEL, pad)) {
 			pblk_err(pblk, "could not pad page in write bio\n");
@@ -612,6 +689,7 @@ try:
 		else
 			pblk_warn(pblk, "padding more than min. sectors\n");
 
+		pr_info("%s():added pad %u to pad_wa\n",__func__,pad);
 		atomic64_add(pad, &pblk->pad_wa);
 	}
 
