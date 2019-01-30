@@ -21,10 +21,14 @@
 int pblk_write_to_cache(struct pblk *pblk, struct bio *bio, unsigned long flags)
 {
 	struct request_queue *q = pblk->dev->q;
+	// w_ctx is used per entry of buffer. each entry has bio, lba and ppa
+	// associated with it.
 	struct pblk_w_ctx w_ctx;
+	// get lba from the bio
 	sector_t lba = pblk_get_lba(bio);
 	unsigned long start_time = jiffies;
 	unsigned int bpos, pos;
+	// pblk_write_to_cache is called for each bio write
 	int nr_entries = pblk_get_secs(bio);
 	int i, ret;
 
@@ -36,7 +40,15 @@ int pblk_write_to_cache(struct pblk *pblk, struct bio *bio, unsigned long flags)
 	 * rollback from here on.
 	 */
 retry:
+
+	// ppa mapping initialized here (bpos is initialized to mem here)
+	// nr_entries - number of sectors in bio to be written
 	ret = pblk_rb_may_write_user(&pblk->rwb, bio, nr_entries, &bpos);
+	// this will return NVM_IO_REQUEUE if sanity checks on rb such as
+	// insufficient space on rb is detected. 
+	// returns NVM_IO_OK or NVM_IO_DONE if things are set to be written
+	// correctly to rb eg. flush point pointer. 
+	// 
 	switch (ret) {
 	case NVM_IO_REQUEUE:
 		io_schedule();
@@ -46,8 +58,13 @@ retry:
 		goto out;
 	}
 
+	// write context ppa set empty here. no writes have been performed yet.
+	// all sanity checks have been done. space has been made in rb to 
+	// accomodate the writes.
+	
 	pblk_ppa_set_empty(&w_ctx.ppa);
 	w_ctx.flags = flags;
+	// kick write thread if preflush is required.
 	if (bio->bi_opf & REQ_PREFLUSH) {
 		w_ctx.flags |= PBLK_FLUSH_ENTRY;
 		pblk_write_kick(pblk);
@@ -62,6 +79,10 @@ retry:
 		w_ctx.lba = lba + i;
 
 		pos = pblk_rb_wrap_pos(&pblk->rwb, bpos + i);
+//		pr_info("lba = %llu pos = %u\n", w_ctx.lba, pos);
+		// this is where writes happen to cache, and 
+		// mapping between lbas in bio blocks and ppas
+		// of the cache are stored in the l2pmap.
 		pblk_rb_write_entry_user(&pblk->rwb, data, w_ctx, pos);
 
 		bio_advance(bio, PBLK_EXPOSED_PAGE_SIZE);
