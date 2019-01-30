@@ -19,23 +19,44 @@
 
 #include "pblk.h"
 
+static void get_secs_reqd_per_lun(__le64 *lba_list, int *nr_secs_per_lun)
+{
+	int i;
+	for (i = 0; i < 20 ;  i++){
+		nr_secs_per_lun[i] = 2;
+	}
+}
+
+// sentry = rb smem offset. ppa_list- populated in this function
+// meta_list = OOB region buffer for only valid_secs
+// valid_secs = map_secs = min secs to map or valid % min secs
+
 static int pblk_map_page_data(struct pblk *pblk, unsigned int sentry,
 			      struct ppa_addr *ppa_list,
 			      unsigned long *lun_bitmap,
 			      void *meta_list,
 			      unsigned int valid_secs)
 {
+	// get l_mg.data line
 	struct pblk_line *line = pblk_line_get_data(pblk);
 	struct pblk_emeta *emeta;
 	struct pblk_w_ctx *w_ctx;
-	__le64 *lba_list;
-	u64 paddr;
+
+	__le64 *lba_list, all_lbas[8];
 	int nr_secs = pblk->min_write_pgs;
 	int i;
+
+	// XXX change 20 to nr_luns
+	int nr_secs_per_lun[20];
+	// XXX change 20 to nr_secs / pblk->min_write_pgs;
+	u64 paddr_list[20];
+
+	BUG_ON(nr_secs > 20);
 
 	if (!line)
 		return -ENOSPC;
 
+	// line->left_msecs = 0, open new line.
 	if (pblk_line_is_full(line)) {
 		struct pblk_line *prev_line = line;
 
@@ -52,17 +73,33 @@ static int pblk_map_page_data(struct pblk *pblk, unsigned int sentry,
 
 	}
 
+	// end meta
 	emeta = line->emeta;
+	// this is to store lbas from [rb w_ctx->lba] in the endmeta buffer
 	lba_list = emeta_to_lbas(pblk, emeta->buf);
+	get_secs_reqd_per_lun(lba_list, nr_secs_per_lun);
 
-	paddr = pblk_alloc_page(pblk, line, nr_secs);
+	// get all lbas first:
+	for (i = 0 ; i < valid_secs ; i++) {
+		w_ctx = pblk_rb_w_ctx(&pblk->rwb, sentry + i);
+		all_lbas[i] = cpu_to_le64(w_ctx->lba);
+		pr_info("%s():mapping lba %llu\n", __func__,all_lbas[i]);
+	}
 
-	for (i = 0; i < nr_secs; i++, paddr++) {
+	// nr_secs = min write pages = 8
+
+	pblk_alloc_page_data(pblk, line, nr_secs_per_lun, paddr_list);
+	for(i = 0 ; i < nr_secs; i++ ){
+		pr_info("%s(): paddr returned = %llu\n",__func__, paddr_list[i]);
+	}
+//	paddr = pblk_alloc_page(pblk, line, nr_secs);
+
+	for (i = 0; i < nr_secs; i++ /*, paddr++ */) {
 		struct pblk_sec_meta *meta = pblk_get_meta(pblk, meta_list, i);
 		__le64 addr_empty = cpu_to_le64(ADDR_EMPTY);
 
 		/* ppa to be sent to the device */
-		ppa_list[i] = addr_to_gen_ppa(pblk, paddr, line->id);
+		//pr_info("%s():paddr=%llu\n", __func__,paddr_list[i]);
 
 		/* Write context for target bio completion on write buffer. Note
 		 * that the write buffer is protected by the sync backpointer,
@@ -72,19 +109,22 @@ static int pblk_map_page_data(struct pblk *pblk, unsigned int sentry,
 		 * lock or memory barrier.
 		 */
 		if (i < valid_secs) {
+		//	ppa_list[i] = addr_to_gen_ppa(pblk, paddr, line->id);
+			ppa_list[i] = addr_to_gen_ppa(pblk, paddr_list[i], line->id);
 			kref_get(&line->ref);
 			w_ctx = pblk_rb_w_ctx(&pblk->rwb, sentry + i);
 			w_ctx->ppa = ppa_list[i];
 			meta->lba = cpu_to_le64(w_ctx->lba);
-			lba_list[paddr] = cpu_to_le64(w_ctx->lba);
-			if (lba_list[paddr] != addr_empty)
+			lba_list[paddr_list[i]] = cpu_to_le64(w_ctx->lba);
+			pr_info("%s():lba = %llu ppa = %llu\n", __func__, lba_list[paddr_list[i]], paddr_list[i]);
+			if (lba_list[paddr_list[i]] != addr_empty)
 				line->nr_valid_lbas++;
 			else
 				atomic64_inc(&pblk->pad_wa);
 		} else {
-			lba_list[paddr] = addr_empty;
+			lba_list[paddr_list[i]] = addr_empty;
 			meta->lba = addr_empty;
-			__pblk_map_invalidate(pblk, line, paddr);
+			__pblk_map_invalidate(pblk, line, paddr_list[i]);
 		}
 	}
 
@@ -92,10 +132,13 @@ static int pblk_map_page_data(struct pblk *pblk, unsigned int sentry,
 	return 0;
 }
 
+// sentry = old subm. valid_secs = secs_available, off = 0
+// return 0 - good execution. might return -ENOSPC.
 int pblk_map_rq(struct pblk *pblk, struct nvm_rq *rqd, unsigned int sentry,
 		 unsigned long *lun_bitmap, unsigned int valid_secs,
 		 unsigned int off)
 {
+	// get OOB area that contains page metadata
 	void *meta_list = pblk_get_meta_for_writes(pblk, rqd);
 	void *meta_buffer;
 	struct ppa_addr *ppa_list = nvm_rq_to_ppa_list(rqd);
@@ -105,9 +148,12 @@ int pblk_map_rq(struct pblk *pblk, struct nvm_rq *rqd, unsigned int sentry,
 	int ret;
 
 	for (i = off; i < rqd->nr_ppas; i += min) {
+		// keep mapping min secs at a time. other than the last
+		// write where we map only valid secs % min.
 		map_secs = (i + min > valid_secs) ? (valid_secs % min) : min;
+		// query the OOB metalist that returns i offset of the list
 		meta_buffer = pblk_get_meta(pblk, meta_list, i);
-
+		// map each buffer in cacheline to write context.
 		ret = pblk_map_page_data(pblk, sentry + i, &ppa_list[i],
 					lun_bitmap, meta_buffer, map_secs);
 		if (ret)
