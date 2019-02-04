@@ -479,16 +479,19 @@ void pblk_log_read_err(struct pblk *pblk, struct nvm_rq *rqd)
 {
 	/* Empty page read is not necessarily an error (e.g., L2P recovery) */
 	if (rqd->error == NVM_RSP_ERR_EMPTYPAGE) {
+		pr_info("NVM_RSP_ERR_EMPTYPAGE\n");
 		atomic_long_inc(&pblk->read_empty);
 		return;
 	}
 
 	switch (rqd->error) {
 	case NVM_RSP_WARN_HIGHECC:
+		pr_info("NVM_RSP_WARN_HIGHECC\n");
 		atomic_long_inc(&pblk->read_high_ecc);
 		break;
 	case NVM_RSP_ERR_FAILECC:
 	case NVM_RSP_ERR_FAILCRC:
+		pr_info("NVM_RSP_ERR_FAILCRC, NVM_RSP_ERR_FAILECC\n");
 		atomic_long_inc(&pblk->read_failed);
 		break;
 	default:
@@ -689,11 +692,9 @@ void find_next_zero_bit_same_lun(const unsigned long*addr, int total_size, int c
 	int rem;
 	for ( i = 0 ; i < num_req_sectors ; i++) {
 		curr_offset = find_next_zero_bit(addr, total_size, line->cur_secs[curr_lun]);
-		//pr_info("curr_offset = %d ", curr_offset);
 		if ( (curr_offset % (total_luns * nr_secs) <  (nr_secs * (curr_lun + 1)))
 			&& (curr_offset % (total_luns * nr_secs) >= (nr_secs * (curr_lun))) )
 		{
-		//	pr_info(" belongs to current lun %d\n", curr_lun);
 			paddr_list[i] = curr_offset;
 			line->cur_secs[curr_lun] = curr_offset;
 			WARN_ON(test_and_set_bit(line->cur_secs[curr_lun]++, line->map_bitmap));
@@ -701,12 +702,10 @@ void find_next_zero_bit_same_lun(const unsigned long*addr, int total_size, int c
 			curr_offset_base = ((div_u64_rem(curr_offset, stripe_length, &rem)) * stripe_length)
 						+ (curr_lun * nr_secs);
 			curr_offset = (curr_offset_base > curr_offset) ? curr_offset_base : curr_offset_base + (stripe_length);
-		//	pr_info(" didnt belong to current lun, updated to %d for lun %d\n", curr_offset, curr_lun);
 			paddr_list[i] = curr_offset;
 			line->cur_secs[curr_lun] = curr_offset;
 			WARN_ON(test_and_set_bit(line->cur_secs[curr_lun]++, line->map_bitmap));
 		}
-		//pr_info("%s(): paddr = %llu\n",__func__,paddr_list[i]);
 	}
 }
 
@@ -728,7 +727,6 @@ void __pblk_alloc_page_data(struct pblk *pblk, struct pblk_line *line, int *nr_s
 	// check if cur_secs for lun + nr_secs does not exceed total sectors
 	// allocated to the lun
 	for (lun = 0 ; lun < total_luns ; lun++) {
-//		pr_info("%s(): allocating %d secs for lun %d\n",__func__,nr_secs_per_lun[lun],lun);
 		if ( ((line->cur_secs[lun] / total_luns) + ((line->cur_secs[lun] % total_luns)  + nr_secs))
 					> pblk->lm.sec_per_line_per_lun)
 		{
@@ -1712,17 +1710,21 @@ struct pblk_line *pblk_line_replace_data(struct pblk *pblk)
 	struct pblk_line *cur, *new = NULL;
 	unsigned int left_seblks;
 
+	pr_info("%s():enter\n", __func__);
 	new = l_mg->data_next;
 	if (!new)
 		goto out;
 
+	pr_info("%s():%d acquire lock\n", __func__, __LINE__);
 	spin_lock(&l_mg->free_lock);
 	cur = l_mg->data_line;
 	l_mg->data_line = new;
 
+	pr_info("%s():%d call setup line metadata\n", __func__, __LINE__);
 	pblk_line_setup_metadata(new, l_mg, &pblk->lm);
 	spin_unlock(&l_mg->free_lock);
 
+	pr_info("%s():%d unlock\n", __func__, __LINE__);
 retry_erase:
 	left_seblks = atomic_read(&new->left_seblks);
 	if (left_seblks) {
@@ -1733,18 +1735,24 @@ retry_erase:
 		} else {
 			io_schedule();
 		}
+		pr_info("%s():%d retry_erase\n", __func__, __LINE__);
 		goto retry_erase;
 	}
 
-	if (pblk_line_alloc_bitmaps(pblk, new))
+	pr_info("%s():%d check for alloc bitmaps\n", __func__, __LINE__);
+	if (pblk_line_alloc_bitmaps(pblk, new)) {
+		pr_info("%s():%d return null\n", __func__, __LINE__);
 		return NULL;
-
+	}
+	pr_info("%s():%d done checking\n", __func__, __LINE__);
 retry_setup:
+	pr_info("%s():%d init metadata\n", __func__, __LINE__);
 	if (!pblk_line_init_metadata(pblk, new, cur)) {
 		new = pblk_line_retry(pblk, new);
 		if (!new)
 			goto out;
 
+		pr_info("%s():%d retry_setup1\n", __func__, __LINE__);
 		goto retry_setup;
 	}
 
@@ -1753,6 +1761,7 @@ retry_setup:
 		if (!new)
 			goto out;
 
+		pr_info("%s():%d retry_setup2n", __func__, __LINE__);
 		goto retry_setup;
 	}
 
@@ -1775,6 +1784,7 @@ retry_setup:
 	spin_unlock(&l_mg->free_lock);
 
 out:
+	pr_info("%s():exit\n",__func__);
 	return new;
 }
 
@@ -1886,15 +1896,36 @@ struct pblk_line *pblk_line_get_erase(struct pblk *pblk)
 	return pblk->l_mg.data_next;
 }
 
-int pblk_line_is_full(struct pblk_line *line)
+int pblk_line_is_full(struct pblk_line *line, struct pblk *pblk)
 {
-	return (line->left_msecs == 0);
+	int i;
+	struct nvm_tgt_dev *dev = pblk->dev;
+	struct nvm_geo *geo = &dev->geo;
+	int total_luns = geo->all_luns;
+	
+	if (line->left_msecs == 0)
+		return 1;
+
+	// XXX change 8 to nr_secs, the minimum number of sectors
+	// sent to pblk to be written.
+
+	for (i = 0; i < total_luns ; i++) {
+		if(line-> cur_secs[i] + 8 > pblk->lm.sec_per_line_per_lun) {
+			pr_info("%s()\n", __func__);
+			return 1;	
+		}
+	}
+
+	return 0;
 }
 
 static void pblk_line_should_sync_meta(struct pblk *pblk)
 {
-	if (pblk_rl_is_limit(&pblk->rl))
+	if (pblk_rl_is_limit(&pblk->rl)) {
 		pblk_line_close_meta_sync(pblk);
+	} else {
+		pr_info("did not close meta sync\n");
+	}
 }
 
 void pblk_line_close(struct pblk *pblk, struct pblk_line *line)
@@ -1905,14 +1936,22 @@ void pblk_line_close(struct pblk *pblk, struct pblk_line *line)
 	struct pblk_line_mgmt *l_mg = &pblk->l_mg;
 	struct list_head *move_list;
 	int i;
+	int num_luns = geo->all_luns;
 
 #ifdef CONFIG_NVM_PBLK_DEBUG
-	WARN(!bitmap_full(line->map_bitmap, lm->sec_per_line),
-				"pblk: corrupt closed line %d\n", line->id);
+	if(!bitmap_full(line->map_bitmap, lm->sec_per_line)) {
+		for(i = 0 ; i < num_luns ; i++) {
+			while(line->cur_secs[i] < ((1 + i) * pblk->lm.sec_per_line_per_lun)) {
+				test_and_set_bit(line->cur_secs[i]++, line->map_bitmap);
+			}
+		}
+	}
+	WARN_ON(!bitmap_full(line->map_bitmap, lm->sec_per_line));
 #endif
 
 	spin_lock(&l_mg->free_lock);
 	WARN_ON(!test_and_clear_bit(line->meta_line, &l_mg->meta_bitmap));
+	pr_info("%s():cleared bit %d\n", __func__, line->meta_line);
 	spin_unlock(&l_mg->free_lock);
 
 	spin_lock(&l_mg->gc_lock);
@@ -1951,6 +1990,7 @@ void pblk_line_close_meta(struct pblk *pblk, struct pblk_line *line)
 	struct line_emeta *emeta_buf = emeta->buf;
 	struct wa_counters *wa = emeta_to_wa(lm, emeta_buf);
 
+	pr_info("%s():enter\n",__func__);
 	/* No need for exact vsc value; avoid a big line lock and take aprox. */
 	memcpy(emeta_to_vsc(pblk, emeta_buf), l_mg->vsc_list, lm->vsc_list_len);
 	memcpy(emeta_to_bb(emeta_buf), line->blk_bitmap, lm->blk_bitmap_len);
@@ -1987,6 +2027,7 @@ void pblk_line_close_meta(struct pblk *pblk, struct pblk_line *line)
 	spin_unlock(&l_mg->close_lock);
 
 	pblk_line_should_sync_meta(pblk);
+	pr_info("%s():exit\n",__func__);
 }
 
 static void pblk_save_lba_list(struct pblk *pblk, struct pblk_line *line)
@@ -2017,6 +2058,7 @@ void pblk_line_close_ws(struct work_struct *work)
 	if (w_err_gc->has_write_err)
 		pblk_save_lba_list(pblk, line);
 
+	pr_info("%s():calling pblk_line_close()\n", __func__);
 	pblk_line_close(pblk, line);
 	mempool_free(line_ws, &pblk->gen_ws_pool);
 }

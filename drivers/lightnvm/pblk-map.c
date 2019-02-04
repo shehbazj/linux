@@ -57,20 +57,22 @@ static int pblk_map_page_data(struct pblk *pblk, unsigned int sentry,
 		return -ENOSPC;
 
 	// line->left_msecs = 0, open new line.
-	if (pblk_line_is_full(line)) {
+	if (pblk_line_is_full(line, pblk)) {
 		struct pblk_line *prev_line = line;
 
 		/* If we cannot allocate a new line, make sure to store metadata
 		 * on current line and then fail
 		 */
+		pr_info("%s():calling line replace data\n",__func__);
 		line = pblk_line_replace_data(pblk);
+		pr_info("%s():calling line close meta\n",__func__);
 		pblk_line_close_meta(pblk, prev_line);
+		//pblk_line_close(pblk, prev_line);
 
 		if (!line) {
 			pblk_pipeline_stop(pblk);
 			return -ENOSPC;
 		}
-
 	}
 
 	// end meta
@@ -88,6 +90,7 @@ static int pblk_map_page_data(struct pblk *pblk, unsigned int sentry,
 
 	// nr_secs = min write pages = 8
 
+	pr_info("%s():calling pblk alloc page data\n",__func__);
 	pblk_alloc_page_data(pblk, line, nr_secs_per_lun, paddr_list);
 	for(i = 0 ; i < nr_secs; i++ ){
 		pr_info("%s(): paddr returned = %llu\n",__func__, paddr_list[i]);
@@ -129,6 +132,7 @@ static int pblk_map_page_data(struct pblk *pblk, unsigned int sentry,
 	}
 
 	pblk_down_rq(pblk, ppa_list[0], lun_bitmap);
+	pr_info("%s():exit\n",__func__);
 	return 0;
 }
 
@@ -147,6 +151,7 @@ int pblk_map_rq(struct pblk *pblk, struct nvm_rq *rqd, unsigned int sentry,
 	int i;
 	int ret;
 
+	pr_info("%s():init\n",__func__);
 	for (i = off; i < rqd->nr_ppas; i += min) {
 		// keep mapping min secs at a time. other than the last
 		// write where we map only valid secs % min.
@@ -156,10 +161,13 @@ int pblk_map_rq(struct pblk *pblk, struct nvm_rq *rqd, unsigned int sentry,
 		// map each buffer in cacheline to write context.
 		ret = pblk_map_page_data(pblk, sentry + i, &ppa_list[i],
 					lun_bitmap, meta_buffer, map_secs);
-		if (ret)
+		if (ret) {
+			pr_info("%s():exit with ret %d\n",__func__, ret);
 			return ret;
+		}
 	}
 
+	pr_info("%s():exit\n",__func__);
 	return 0;
 }
 

@@ -276,7 +276,7 @@ next_pad_rq:
 		ret = -ETIME;
 	}
 
-	if (!pblk_line_is_full(line))
+	if (!pblk_line_is_full(line, pblk))
 		pblk_err(pblk, "corrupted padded line: %d\n", line->id);
 
 	vfree(data);
@@ -466,7 +466,7 @@ retry_rq:
 		goto next_rq;
 
 #ifdef CONFIG_NVM_PBLK_DEBUG
-	WARN_ON(padded && !pblk_line_is_full(line));
+	WARN_ON(padded && !pblk_line_is_full(line, pblk));
 #endif
 
 	return 0;
@@ -514,7 +514,7 @@ static int pblk_recov_l2p_from_oob(struct pblk *pblk, struct pblk_line *line)
 		goto out;
 	}
 
-	if (pblk_line_is_full(line))
+	if (pblk_line_is_full(line, pblk))
 		pblk_line_recov_close(pblk, line);
 
 out:
@@ -779,7 +779,7 @@ struct pblk_line *pblk_recov_l2p(struct pblk *pblk)
 			pblk_recov_l2p_from_oob(pblk, line);
 
 next:
-		if (pblk_line_is_full(line)) {
+		if (pblk_line_is_full(line, pblk)) {
 			struct list_head *move_list;
 
 			spin_lock(&line->lock);

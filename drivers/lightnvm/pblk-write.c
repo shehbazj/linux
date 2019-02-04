@@ -280,6 +280,7 @@ static void pblk_end_io_write_meta(struct nvm_rq *rqd)
 
 	if (rqd->error) {
 		pblk_log_write_err(pblk, rqd);
+		pr_info("error = %x\n", rqd->error);
 		pblk_err(pblk, "metadata I/O failed. Line %d\n", line->id);
 		line->w_err_gc->has_write_err = 1;
 	} else {
@@ -288,6 +289,7 @@ static void pblk_end_io_write_meta(struct nvm_rq *rqd)
 	}
 
 	sync = atomic_add_return(rqd->nr_ppas, &emeta->sync);
+	pr_info("%s():sync = %d rqd->nr_ppas = %d emeta->sync = %d\n", __func__, sync, rqd->nr_ppas, atomic_read(&emeta->sync));
 	if (sync == emeta->nr_entries)
 		pblk_gen_run_ws(pblk, line, NULL, pblk_line_close_ws,
 						GFP_ATOMIC, pblk->close_wq);
