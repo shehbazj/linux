@@ -290,9 +290,13 @@ static void pblk_end_io_write_meta(struct nvm_rq *rqd)
 
 	sync = atomic_add_return(rqd->nr_ppas, &emeta->sync);
 	pr_info("%s():sync = %d rqd->nr_ppas = %d emeta->sync = %d\n", __func__, sync, rqd->nr_ppas, atomic_read(&emeta->sync));
-	if (sync == emeta->nr_entries)
+	if (sync == emeta->nr_entries) {
 		pblk_gen_run_ws(pblk, line, NULL, pblk_line_close_ws,
 						GFP_ATOMIC, pblk->close_wq);
+		pr_info("%s():E sync = %d, emeta->nr_entries = %d\n", __func__, sync, emeta->nr_entries);
+	} else {
+		pr_info("%s():NE sync = %d, emeta->nr_entries = %d\n", __func__, sync, emeta->nr_entries);
+	}
 
 	pblk_free_rqd(pblk, rqd, PBLK_WRITE_INT);
 
@@ -507,18 +511,23 @@ static struct pblk_line *pblk_should_submit_meta_io(struct pblk *pblk,
 	spin_lock(&l_mg->close_lock);
 	if (list_empty(&l_mg->emeta_list)) {
 		spin_unlock(&l_mg->close_lock);
+		pr_info("%s():emeta list empty\n",__func__);
 		return NULL;
 	}
 	meta_line = list_first_entry(&l_mg->emeta_list, struct pblk_line, list);
 	if (meta_line->emeta->mem >= lm->emeta_len[0]) {
 		spin_unlock(&l_mg->close_lock);
+		pr_info("%s():mem >= emeta_len[0]\n",__func__);
 		return NULL;
 	}
 	spin_unlock(&l_mg->close_lock);
 
-	if (!pblk_valid_meta_ppa(pblk, meta_line, data_rqd))
+	if (!pblk_valid_meta_ppa(pblk, meta_line, data_rqd)) {
+		pr_info("%s():valid meta ppa\n",__func__);
 		return NULL;
+	}
 
+	pr_info("%s():returning meta_line\n", __func__);
 	return meta_line;
 }
 
@@ -544,7 +553,12 @@ static int pblk_submit_io_set(struct pblk *pblk, struct nvm_rq *rqd)
 
 	// returns you a metadata line.
 	meta_line = pblk_should_submit_meta_io(pblk, rqd);
-
+	if(meta_line) {
+		pr_info("%s():metaline is not null\n",__func__);
+	}else {
+		pr_info("%s():metaline is null\n",__func__);
+	}
+	
 	/* Submit data write for current data line */
 	err = pblk_submit_io(pblk, rqd);
 	if (err) {
@@ -568,6 +582,7 @@ static int pblk_submit_io_set(struct pblk *pblk, struct nvm_rq *rqd)
 
 	if (meta_line) {
 		/* Submit metadata write for previous data line */
+		pr_info("%s():calling pblk_submit_meta_io\n", __func__);
 		err = pblk_submit_meta_io(pblk, meta_line);
 		if (err) {
 			pblk_err(pblk, "metadata I/O submission failed: %d",
@@ -575,7 +590,6 @@ static int pblk_submit_io_set(struct pblk *pblk, struct nvm_rq *rqd)
 			return NVM_IO_ERR;
 		}
 	}
-
 	return NVM_IO_OK;
 }
 
