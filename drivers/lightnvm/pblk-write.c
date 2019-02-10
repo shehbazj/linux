@@ -397,7 +397,10 @@ int pblk_submit_meta_io(struct pblk *pblk, struct pblk_line *meta_line)
 	struct bio *bio;
 	struct nvm_rq *rqd;
 	void *data;
-	u64 paddr;
+	// XXX introducing paddr_list of size 20. this is hardcoded.
+	// change this to rq_ppas.
+	u64 paddr_list[20];
+	// min_write_pgs = 8
 	int rq_ppas = pblk->min_write_pgs;
 	int id = meta_line->id;
 	int rq_len;
@@ -409,7 +412,10 @@ int pblk_submit_meta_io(struct pblk *pblk, struct pblk_line *meta_line)
 	m_ctx = nvm_rq_to_pdu(rqd);
 	m_ctx->private = meta_line;
 
-	rq_len = rq_ppas * geo->csecs;
+	rq_len = rq_ppas * geo->csecs;	// rq_ppas = 8, csecs = chunk sectors = 4096 rq_len = 32768
+
+	pr_info("%s():rq_ppas = %d, geo->csecs = %d, rq_len = %d\n",__func__,rq_ppas, geo->csecs, rq_len);
+
 	data = ((void *)emeta->buf) + emeta->mem;
 
 	bio = pblk_bio_map_addr(pblk, data, rq_ppas, rq_len,
@@ -428,18 +434,29 @@ int pblk_submit_meta_io(struct pblk *pblk, struct pblk_line *meta_line)
 		goto fail_free_bio;
 
 	ppa_list = nvm_rq_to_ppa_list(rqd);
+
+	pr_info("%s():rqd->nr_ppas %d, rq_ppas %d\n",__func__, rqd->nr_ppas, rq_ppas);
+	// rqd->nr_ppas = 8, rq_ppas = 8
+	// for now, allocate all rqd->nr_ppas from the first PU.
+	// XXX allocation scheme is hardcoded for now, this allocation scheme 
+	// makes sure that all meta pages are allocated from the first PU.
+
+	int allocation_scheme[] = {rq_ppas, 0, 0, 0};
 	for (i = 0; i < rqd->nr_ppas; ) {
 		spin_lock(&meta_line->lock);
-		paddr = __pblk_alloc_page(pblk, meta_line, rq_ppas);
+		__pblk_alloc_page_data(pblk, meta_line, allocation_scheme, paddr_list, rq_ppas);
 		spin_unlock(&meta_line->lock);
-		for (j = 0; j < rq_ppas; j++, i++, paddr++)
-			ppa_list[i] = addr_to_gen_ppa(pblk, paddr, id);
+		for (j = 0; j < rq_ppas; j++, i++)
+			ppa_list[i] = addr_to_gen_ppa(pblk, paddr_list[j], id);
 	}
 
 	spin_lock(&l_mg->close_lock);
 	emeta->mem += rq_len;
-	if (emeta->mem >= lm->emeta_len[0])
+	if (emeta->mem >= lm->emeta_len[0]) {
+		pr_info("%s():delete list from meta_line\n");
+		pr_info("%s():emeta->mem = %d lm->emeta_len[0] = %d\n", __func__, emeta->mem, lm->emeta_len[0]);
 		list_del(&meta_line->list);
+	}
 	spin_unlock(&l_mg->close_lock);
 
 	pblk_down_chunk(pblk, ppa_list[0]);
@@ -476,6 +493,9 @@ static inline bool pblk_valid_meta_ppa(struct pblk *pblk,
 	struct ppa_addr ppa, ppa_opt;
 	u64 paddr;
 	int pos_opt;
+	int total_lines;
+
+	total_lines = 4;
 
 	/* Schedule a metadata I/O that is half the distance from the data I/O
 	 * with regards to the number of LUNs forming the pblk instance. This
@@ -486,17 +506,33 @@ static inline bool pblk_valid_meta_ppa(struct pblk *pblk,
 	 * this case, modify the distance to not be optimal, but move the
 	 * optimal in the right direction.
 	 */
+
+	return true;	
+//	pr_info("%s():meta_line cur_sec = %d\n", __func__,meta_line->cur_sec);
 	paddr = pblk_lookup_page(pblk, meta_line);
-	ppa = addr_to_gen_ppa(pblk, paddr, 0);
-	ppa_opt = addr_to_gen_ppa(pblk, paddr + data_line->meta_distance, 0);
-	pos_opt = pblk_ppa_to_pos(geo, ppa_opt);
+	ppa = addr_to_gen_ppa(pblk, paddr, data_line->id);
+	ppa_opt = addr_to_gen_ppa(pblk, paddr + data_line->meta_distance, data_line->id);
+//	pr_info("%s():XXX data line meta_distance %d\n",__func__, data_line->meta_distance);	
+//	pos_opt = pblk_ppa_to_pos(geo, ppa_opt);
 
+//	pr_info("%s():p.a.lun = %d, geo->num_ch = %d p.a.ch = %d\n", __func__, ppa_opt.a.lun , geo->num_ch , ppa_opt.a.ch);
+//	pr_info("%s():pos_opt = %d\n",__func__,pos_opt);
+
+	// +2 = total number of luns / 2. 
+	pos_opt = (data_line->id + data_line->meta_distance) % total_lines;
+
+	pr_info("%s():pos_opt = %d\n", __func__, pos_opt);
+	pr_info("%s():lun_bitmap = %lu blk_bitmap = %lu\n", __func__, *data_c_ctx->lun_bitmap, *data_line->blk_bitmap);
 	if (test_bit(pos_opt, data_c_ctx->lun_bitmap) ||
-				test_bit(pos_opt, data_line->blk_bitmap))
+				test_bit(pos_opt, data_line->blk_bitmap)) {
+               pr_info("test_bit(pos_opt, data_c_ctx->lun_bitmap) = %d, test_bit(pos_opt, data_line->blk_bitmap) = %d\n", test_bit(pos_opt, data_c_ctx->lun_bitmap), test_bit(pos_opt, data_line->blk_bitmap));
 		return true;
+	}
 
-	if (unlikely(pblk_ppa_comp(ppa_opt, ppa)))
+	if (unlikely(pblk_ppa_comp(ppa_opt, ppa))) {
+               	pr_info("%s():reduce meta_distance %d\n",__func__, data_line->meta_distance);
 		data_line->meta_distance--;
+	}
 
 	return false;
 }
@@ -517,15 +553,19 @@ static struct pblk_line *pblk_should_submit_meta_io(struct pblk *pblk,
 	meta_line = list_first_entry(&l_mg->emeta_list, struct pblk_line, list);
 	if (meta_line->emeta->mem >= lm->emeta_len[0]) {
 		spin_unlock(&l_mg->close_lock);
-		pr_info("%s():mem >= emeta_len[0]\n",__func__);
+		pr_info("%s():meta_line->emeta->mem = %d lm->emeta_len[0]=%d\n",__func__, meta_line->emeta->mem, lm->emeta_len[0]);
 		return NULL;
+	} else {
+		pr_info("%s():meta_line->emeta->mem = %d lm->emeta_len[0]=%d\n",__func__, meta_line->emeta->mem, lm->emeta_len[0]);
 	}
 	spin_unlock(&l_mg->close_lock);
 
 	if (!pblk_valid_meta_ppa(pblk, meta_line, data_rqd)) {
-		pr_info("%s():valid meta ppa\n",__func__);
+		pr_info("%s():invalid meta ppa\n",__func__);
 		return NULL;
-	}
+	} else {
+               pr_info("%s():valid meta ppa\n",__func__);
+        }
 
 	pr_info("%s():returning meta_line\n", __func__);
 	return meta_line;

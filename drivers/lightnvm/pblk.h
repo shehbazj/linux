@@ -843,7 +843,7 @@ struct list_head *pblk_line_gc_list(struct pblk *pblk, struct pblk_line *line);
 u64 pblk_lookup_page(struct pblk *pblk, struct pblk_line *line);
 void pblk_dealloc_page(struct pblk *pblk, struct pblk_line *line, int nr_secs);
 u64 pblk_alloc_page(struct pblk *pblk, struct pblk_line *line, int nr_secs);
-void pblk_alloc_page_data(struct pblk *pblk, struct pblk_line *line, int *nr_secs_per_lun, u64*paddrs);
+void pblk_alloc_page_data(struct pblk *pblk, struct pblk_line *line, int *nr_secs_per_lun, u64*paddrs, int nr_secs);
 u64 __pblk_alloc_page(struct pblk *pblk, struct pblk_line *line, int nr_secs);
 void __pblk_alloc_page_data(struct pblk *pblk, struct pblk_line *line, int *nr_secs_per_lun, u64* paddr_list, int nr_secs);
 int pblk_calc_secs(struct pblk *pblk, unsigned long secs_avail,
