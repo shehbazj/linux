@@ -507,30 +507,20 @@ static inline bool pblk_valid_meta_ppa(struct pblk *pblk,
 	 * optimal in the right direction.
 	 */
 
-	return true;	
-//	pr_info("%s():meta_line cur_sec = %d\n", __func__,meta_line->cur_sec);
 	paddr = pblk_lookup_page(pblk, meta_line);
-	ppa = addr_to_gen_ppa(pblk, paddr, data_line->id);
-	ppa_opt = addr_to_gen_ppa(pblk, paddr + data_line->meta_distance, data_line->id);
-//	pr_info("%s():XXX data line meta_distance %d\n",__func__, data_line->meta_distance);	
-//	pos_opt = pblk_ppa_to_pos(geo, ppa_opt);
-
-//	pr_info("%s():p.a.lun = %d, geo->num_ch = %d p.a.ch = %d\n", __func__, ppa_opt.a.lun , geo->num_ch , ppa_opt.a.ch);
-//	pr_info("%s():pos_opt = %d\n",__func__,pos_opt);
+	ppa = addr_to_gen_ppa(pblk, paddr, 0);
+	ppa_opt = addr_to_gen_ppa(pblk, paddr + data_line->meta_distance, 0);
+	pos_opt = pblk_ppa_to_pos(geo, ppa_opt);
 
 	// +2 = total number of luns / 2. 
-	pos_opt = (data_line->id + data_line->meta_distance) % total_lines;
+	//pos_opt = (data_line->id + data_line->meta_distance) % total_lines;
 
-	pr_info("%s():pos_opt = %d\n", __func__, pos_opt);
-	pr_info("%s():lun_bitmap = %lu blk_bitmap = %lu\n", __func__, *data_c_ctx->lun_bitmap, *data_line->blk_bitmap);
 	if (test_bit(pos_opt, data_c_ctx->lun_bitmap) ||
 				test_bit(pos_opt, data_line->blk_bitmap)) {
-               pr_info("test_bit(pos_opt, data_c_ctx->lun_bitmap) = %d, test_bit(pos_opt, data_line->blk_bitmap) = %d\n", test_bit(pos_opt, data_c_ctx->lun_bitmap), test_bit(pos_opt, data_line->blk_bitmap));
 		return true;
 	}
 
 	if (unlikely(pblk_ppa_comp(ppa_opt, ppa))) {
-               	pr_info("%s():reduce meta_distance %d\n",__func__, data_line->meta_distance);
 		data_line->meta_distance--;
 	}
 
