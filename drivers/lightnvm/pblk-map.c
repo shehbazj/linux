@@ -90,11 +90,11 @@ static int pblk_map_page_data(struct pblk *pblk, unsigned int sentry,
 
 	// nr_secs = min write pages = 8
 
-	pr_info("%s():calling pblk alloc page data\n",__func__);
-	pblk_alloc_page_data(pblk, line, nr_secs_per_lun, paddr_list);
-	for(i = 0 ; i < nr_secs; i++ ){
-		pr_info("%s(): paddr returned = %llu\n",__func__, paddr_list[i]);
-	}
+//	pr_info("%s():calling pblk alloc page data\n",__func__);
+	pblk_alloc_page_data(pblk, line, nr_secs_per_lun, paddr_list, nr_secs);
+//	for(i = 0 ; i < nr_secs; i++ ){
+//		pr_info("%s(): paddr returned = %llu\n",__func__, paddr_list[i]);
+//	}
 //	paddr = pblk_alloc_page(pblk, line, nr_secs);
 
 	for (i = 0; i < nr_secs; i++ /*, paddr++ */) {
@@ -119,7 +119,7 @@ static int pblk_map_page_data(struct pblk *pblk, unsigned int sentry,
 			w_ctx->ppa = ppa_list[i];
 			meta->lba = cpu_to_le64(w_ctx->lba);
 			lba_list[paddr_list[i]] = cpu_to_le64(w_ctx->lba);
-			pr_info("%s():lba = %llu ppa = %llu\n", __func__, lba_list[paddr_list[i]], paddr_list[i]);
+//			pr_info("%s():lba = %llu ppa = %llu\n", __func__, lba_list[paddr_list[i]], paddr_list[i]);
 			if (lba_list[paddr_list[i]] != addr_empty)
 				line->nr_valid_lbas++;
 			else
@@ -132,7 +132,7 @@ static int pblk_map_page_data(struct pblk *pblk, unsigned int sentry,
 	}
 
 	pblk_down_rq(pblk, ppa_list[0], lun_bitmap);
-	pr_info("%s():exit\n",__func__);
+//	pr_info("%s():exit\n",__func__);
 	return 0;
 }
 
