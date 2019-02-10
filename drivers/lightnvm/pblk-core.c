@@ -765,12 +765,11 @@ u64 pblk_alloc_page(struct pblk *pblk, struct pblk_line *line, int nr_secs)
 // paddr_list = empty list in which paddr for entire lun needs to be filled.
 // size of paddr_list = nr_secs = minimum write pages.
 // size of nr_secs_per_lun = number of luns.
-void pblk_alloc_page_data(struct pblk *pblk, struct pblk_line *line, int *nr_secs_per_lun, u64 *paddr_list)
+void pblk_alloc_page_data(struct pblk *pblk, struct pblk_line *line, int *nr_secs_per_lun, u64 *paddr_list, int nr_secs)
 {
 	/* Lock needed in case a write fails and a recovery needs to remap
 	 * failed write buffer entries
 	 */
-	int nr_secs = 8;
 	spin_lock(&line->lock);
 	__pblk_alloc_page_data(pblk, line, nr_secs_per_lun, paddr_list, nr_secs);
 	line->left_msecs -= nr_secs;
@@ -784,7 +783,7 @@ u64 pblk_lookup_page(struct pblk *pblk, struct pblk_line *line)
 
 	spin_lock(&line->lock);
 	paddr = find_next_zero_bit(line->map_bitmap,
-					pblk->lm.sec_per_line, line->cur_sec);
+					pblk->lm.sec_per_line, line->cur_secs[3]);
 	spin_unlock(&line->lock);
 
 	return paddr;
@@ -1906,11 +1905,11 @@ int pblk_line_is_full(struct pblk_line *line, struct pblk *pblk)
 	if (line->left_msecs == 0)
 		return 1;
 
-	// XXX change 8 to nr_secs, the minimum number of sectors
+	// XXX change 64 to nr_secs, the minimum number of sectors
 	// sent to pblk to be written.
 
 	for (i = 0; i < total_luns ; i++) {
-		if(line-> cur_secs[i] + 8 > pblk->lm.sec_per_line_per_lun) {
+		if(line-> cur_secs[i] + 64 > pblk->lm.sec_per_line_per_lun) {
 			pr_info("%s()\n", __func__);
 			return 1;	
 		}
