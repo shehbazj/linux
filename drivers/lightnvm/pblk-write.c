@@ -293,9 +293,9 @@ static void pblk_end_io_write_meta(struct nvm_rq *rqd)
 	if (sync == emeta->nr_entries) {
 		pblk_gen_run_ws(pblk, line, NULL, pblk_line_close_ws,
 						GFP_ATOMIC, pblk->close_wq);
-		pr_info("%s():E sync = %d, emeta->nr_entries = %d\n", __func__, sync, emeta->nr_entries);
+		pr_info("%s():Y sync = %d, emeta->nr_entries = %d\n", __func__, sync, emeta->nr_entries);
 	} else {
-		pr_info("%s():NE sync = %d, emeta->nr_entries = %d\n", __func__, sync, emeta->nr_entries);
+		pr_info("%s():N sync = %d, emeta->nr_entries = %d\n", __func__, sync, emeta->nr_entries);
 	}
 
 	pblk_free_rqd(pblk, rqd, PBLK_WRITE_INT);
@@ -453,7 +453,7 @@ int pblk_submit_meta_io(struct pblk *pblk, struct pblk_line *meta_line)
 	spin_lock(&l_mg->close_lock);
 	emeta->mem += rq_len;
 	if (emeta->mem >= lm->emeta_len[0]) {
-		pr_info("%s():delete list from meta_line\n");
+		pr_info("%s():delete list from meta_line\n",__func__);
 		pr_info("%s():emeta->mem = %d lm->emeta_len[0] = %d\n", __func__, emeta->mem, lm->emeta_len[0]);
 		list_del(&meta_line->list);
 	}
@@ -507,6 +507,8 @@ static inline bool pblk_valid_meta_ppa(struct pblk *pblk,
 	 * optimal in the right direction.
 	 */
 
+	return true;
+
 	paddr = pblk_lookup_page(pblk, meta_line);
 	ppa = addr_to_gen_ppa(pblk, paddr, 0);
 	ppa_opt = addr_to_gen_ppa(pblk, paddr + data_line->meta_distance, 0);
@@ -557,7 +559,7 @@ static struct pblk_line *pblk_should_submit_meta_io(struct pblk *pblk,
                pr_info("%s():valid meta ppa\n",__func__);
         }
 
-	pr_info("%s():returning meta_line\n", __func__);
+	pr_info("%s():returning meta_line %d\n", __func__,meta_line->id);
 	return meta_line;
 }
 
