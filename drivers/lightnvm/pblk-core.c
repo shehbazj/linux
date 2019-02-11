@@ -727,11 +727,10 @@ void __pblk_alloc_page_data(struct pblk *pblk, struct pblk_line *line, int *nr_s
 	// check if cur_secs for lun + nr_secs does not exceed total sectors
 	// allocated to the lun
 	for (lun = 0 ; lun < total_luns ; lun++) {
-		if ( ((line->cur_secs[lun] / total_luns) + ((line->cur_secs[lun] % total_luns)  + nr_secs))
-					> pblk->lm.sec_per_line_per_lun)
+		if ( line->cur_secs[lun] + nr_secs_per_lun[lun] + 256 > pblk->lm.sec_per_line)
 		{
-			WARN(1, "pblk: page allocation out of bounds\n");
-			nr_secs_per_lun[lun] = pblk->lm.sec_per_line_per_lun - line->cur_secs[lun];
+			WARN(1, "pblk: page allocation out of bounds cur secs = %d lun = %d nr_secs_per_lun %d pblk->lm.sec_per_line_per_lun %d\n", line->cur_secs[lun], lun, nr_secs_per_lun[lun], pblk->lm.sec_per_line_per_lun);
+			nr_secs_per_lun[lun] = pblk->lm.sec_per_line - line->cur_secs[lun];
 		}
 		
 		// addr is the next 0 sector in line->map_bitmap. instead, skip and
@@ -744,6 +743,43 @@ void __pblk_alloc_page_data(struct pblk *pblk, struct pblk_line *line, int *nr_s
 		sentry += nr_secs_curr_lun;
 	}
 }
+
+void __pblk_alloc_page_mdata(struct pblk *pblk, struct pblk_line *line, int *nr_secs_per_lun, u64* paddr_list, int nr_secs)
+{
+	int lun;
+
+	struct nvm_tgt_dev *dev = pblk->dev;
+        struct nvm_geo *geo = &dev->geo;
+	int total_luns = geo->all_luns;
+	int nr_secs_curr_lun;
+	// keep incrementing sentry by nr_secs_curr_lun each time n number of luns are assigned to it
+	int sentry = 0;
+
+	BUG_ON(total_luns == 0);
+
+	lockdep_assert_held(&line->lock);
+
+	// check if cur_secs for lun + nr_secs does not exceed total sectors
+	// allocated to the lun
+	for (lun = 0 ; lun < total_luns ; lun++) {
+		if ( line->cur_secs[lun] + nr_secs_per_lun[lun] > pblk->lm.sec_per_line)
+		{
+			WARN(1, "pblk: page allocation out of bounds cur secs = %d lun = %d nr_secs_per_lun %d pblk->lm.sec_per_line_per_lun %d\n", line->cur_secs[lun], lun, nr_secs_per_lun[lun], pblk->lm.sec_per_line_per_lun);
+			nr_secs_per_lun[lun] = pblk->lm.sec_per_line - line->cur_secs[lun];
+		}
+		
+		// addr is the next 0 sector in line->map_bitmap. instead, skip and
+		// find the pa that corresponds to the PU in which current lba is to be mapped.
+		nr_secs_curr_lun = nr_secs_per_lun[lun];
+		// update line->map_bitmap in find_next_zero_bit itself
+		find_next_zero_bit_same_lun(line->map_bitmap,
+				pblk->lm.sec_per_line, line->cur_secs[lun],
+				total_luns, nr_secs_curr_lun, paddr_list + sentry, nr_secs, lun, line);
+		sentry += nr_secs_curr_lun;
+	}
+}
+
+
 
 u64 pblk_alloc_page(struct pblk *pblk, struct pblk_line *line, int nr_secs)
 {
@@ -1902,19 +1938,24 @@ int pblk_line_is_full(struct pblk_line *line, struct pblk *pblk)
 	struct nvm_geo *geo = &dev->geo;
 	int total_luns = geo->all_luns;
 	
-	if (line->left_msecs == 0)
+	if (line->left_msecs == 0) {
+		pr_info("%s(): left_msecs == 0 return 1\n", __func__);
 		return 1;
-
-	// XXX change 64 to nr_secs, the minimum number of sectors
-	// sent to pblk to be written.
-
-	for (i = 0; i < total_luns ; i++) {
-		if(line-> cur_secs[i] + 64 > pblk->lm.sec_per_line_per_lun) {
-			pr_info("%s()\n", __func__);
-			return 1;	
-		}
 	}
 
+	// XXX change 128 to nr_secs, the minimum number of sectors
+	// sent to pblk to be written.
+	// each of the cur_secs would have reached the end of the sector, since 
+	// they are skewed only by 32 sectors...
+
+	for (i = 0; i < total_luns ; i++) {
+		if(line->cur_secs[i] + 256 > pblk->lm.sec_per_line) {
+			pr_info("%s(): return 1 cur_secs [%d]=%d\n", __func__, i, line->cur_secs[i]);
+			return 1;
+		}
+	}
+	
+	pr_info("%s(): return 0\n", __func__);
 	return 0;
 }
 

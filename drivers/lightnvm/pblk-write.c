@@ -444,7 +444,7 @@ int pblk_submit_meta_io(struct pblk *pblk, struct pblk_line *meta_line)
 	int allocation_scheme[] = {rq_ppas, 0, 0, 0};
 	for (i = 0; i < rqd->nr_ppas; ) {
 		spin_lock(&meta_line->lock);
-		__pblk_alloc_page_data(pblk, meta_line, allocation_scheme, paddr_list, rq_ppas);
+		__pblk_alloc_page_mdata(pblk, meta_line, allocation_scheme, paddr_list, rq_ppas);
 		spin_unlock(&meta_line->lock);
 		for (j = 0; j < rq_ppas; j++, i++)
 			ppa_list[i] = addr_to_gen_ppa(pblk, paddr_list[j], id);

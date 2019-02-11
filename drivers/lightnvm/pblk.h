@@ -844,6 +844,7 @@ u64 pblk_lookup_page(struct pblk *pblk, struct pblk_line *line);
 void pblk_dealloc_page(struct pblk *pblk, struct pblk_line *line, int nr_secs);
 u64 pblk_alloc_page(struct pblk *pblk, struct pblk_line *line, int nr_secs);
 void pblk_alloc_page_data(struct pblk *pblk, struct pblk_line *line, int *nr_secs_per_lun, u64*paddrs, int nr_secs);
+void __pblk_alloc_page_mdata(struct pblk *pblk, struct pblk_line *line, int *nr_secs_per_lun, u64* paddr_list, int nr_secs);
 u64 __pblk_alloc_page(struct pblk *pblk, struct pblk_line *line, int nr_secs);
 void __pblk_alloc_page_data(struct pblk *pblk, struct pblk_line *line, int *nr_secs_per_lun, u64* paddr_list, int nr_secs);
 int pblk_calc_secs(struct pblk *pblk, unsigned long secs_avail,
@@ -1155,7 +1156,7 @@ static inline void pblk_trans_map_set(struct pblk *pblk, sector_t lba,
 		u32 *map = (u32 *)pblk->trans_map;
 
 		map[lba] = pblk_ppa64_to_ppa32(pblk, ppa);
-	//	pr_info("<32 lba=%lu ppa=%u\n", lba, map[lba]);
+		pr_info("%s():lba=%lu ppa=%u\n", __func__, lba, map[lba]);
 	} else {
 		u64 *map = (u64 *)pblk->trans_map;
 
