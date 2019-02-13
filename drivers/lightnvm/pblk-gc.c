@@ -66,6 +66,7 @@ static void pblk_put_line_back(struct pblk *pblk, struct pblk_line *line)
 
 	spin_lock(&line->lock);
 	WARN_ON(line->state != PBLK_LINESTATE_GC);
+	pr_info("%s():LINESTATE:changing line %d state from %d to CLOSED\n", __func__, line-> id, line-> state);
 	line->state = PBLK_LINESTATE_CLOSED;
 	trace_pblk_line_state(pblk_disk_name(pblk), line->id,
 					line->state);
@@ -91,6 +92,7 @@ static void pblk_gc_line_ws(struct work_struct *work)
 	struct pblk_gc_rq *gc_rq = gc_rq_ws->priv;
 	int ret;
 
+	pr_info("%s():begin\n", __func__);
 	up(&gc->gc_sem);
 
 	gc_rq->data = vmalloc(array_size(gc_rq->nr_secs, geo->csecs));
@@ -196,6 +198,7 @@ static void pblk_gc_line_prepare_ws(struct work_struct *work)
 	unsigned long *invalid_bitmap;
 	int sec_left, nr_secs, bit;
 
+	pr_info("%s():begin for line = %d\n", __func__, line->id);
 	invalid_bitmap = kmalloc(lm->sec_bitmap_len, GFP_KERNEL);
 	if (!invalid_bitmap)
 		goto fail_free_ws;
@@ -214,6 +217,7 @@ static void pblk_gc_line_prepare_ws(struct work_struct *work)
 
 	spin_lock(&line->lock);
 	bitmap_copy(invalid_bitmap, line->invalid_bitmap, lm->sec_per_line);
+	// sec_left = number of valid sector count in the line.
 	sec_left = pblk_line_vsc(line);
 	spin_unlock(&line->lock);
 
@@ -223,12 +227,19 @@ static void pblk_gc_line_prepare_ws(struct work_struct *work)
 	}
 
 	bit = -1;
+
+	// populate invalid bitmap completed.
+	pr_info("%s():invalid bitmap\n",__func__);
+
 next_rq:
 	gc_rq = kmalloc(sizeof(struct pblk_gc_rq), GFP_KERNEL);
 	if (!gc_rq)
 		goto fail_free_lba_list;
 
 	nr_secs = 0;
+	// populate gc_rq list with paddr index and lba mapping of only
+	// those paddrs that were marked as valid.
+	// the valid blocks need to be read from the GC'ed line.
 	do {
 		bit = find_next_zero_bit(invalid_bitmap, lm->sec_per_line,
 								bit + 1);
@@ -240,10 +251,12 @@ next_rq:
 	} while (nr_secs < pblk->max_write_pgs);
 
 	if (unlikely(!nr_secs)) {
+		pr_info("%s():nr_secs was zero\n",__func__);
 		kfree(gc_rq);
 		goto out;
 	}
 
+	// nr_secs should be equal to max_write_pages here.
 	gc_rq->nr_secs = nr_secs;
 	gc_rq->line = line;
 
@@ -264,9 +277,11 @@ next_rq:
 
 	kref_get(&line->ref);
 
+	pr_info("%s():init pblk_gc_line_ws here\n", __func__);
 	INIT_WORK(&gc_rq_ws->ws, pblk_gc_line_ws);
 	queue_work(gc->gc_line_reader_wq, &gc_rq_ws->ws);
 
+	// remove max pages written from valid sector count...
 	sec_left -= nr_secs;
 	if (sec_left > 0)
 		goto next_rq;
@@ -276,9 +291,11 @@ out:
 	kfree(line_ws);
 	kfree(invalid_bitmap);
 
+	pr_info("%s():calling pblk_line_put\n",__func__);
 	kref_put(&line->ref, pblk_line_put);
 	atomic_dec(&gc->read_inflight_gc);
 
+	pr_info("%s(): no fail free scenario\n",__func__);
 	return;
 
 fail_free_gc_rq:
@@ -290,6 +307,7 @@ fail_free_invalid_bitmap:
 fail_free_ws:
 	kfree(line_ws);
 
+	pr_info("%s():fail free scenario was triggered\n",__func__);
 	pblk_put_line_back(pblk, line);
 	kref_put(&line->ref, pblk_line_put);
 	atomic_dec(&gc->read_inflight_gc);
@@ -409,6 +427,7 @@ void pblk_gc_free_full_lines(struct pblk *pblk)
 
 		spin_lock(&line->lock);
 		WARN_ON(line->state != PBLK_LINESTATE_CLOSED);
+		pr_info("%s():LINESTATE change line state of %d from %d to _GC\n", __func__, line-> id, line->state);
 		line->state = PBLK_LINESTATE_GC;
 		trace_pblk_line_state(pblk_disk_name(pblk), line->id,
 					line->state);
@@ -437,6 +456,8 @@ static void pblk_gc_run(struct pblk *pblk)
 	bool run_gc;
 	int read_inflight_gc, gc_group = 0, prev_group = 0;
 
+	// first GC any of the lines that are entirely invalidated.
+
 	pblk_gc_free_full_lines(pblk);
 
 	run_gc = pblk_gc_should_run(&pblk->gc, &pblk->rl);
@@ -444,6 +465,7 @@ static void pblk_gc_run(struct pblk *pblk)
 		return;
 
 next_gc_group:
+	// gc_group would range from 0-4.
 	group_list = l_mg->gc_lists[gc_group++];
 
 	do {
@@ -453,10 +475,13 @@ next_gc_group:
 			break;
 		}
 
+		// select the line in the group_list with the minimum
+		// valid sector count first.
 		line = pblk_gc_get_victim_line(pblk, group_list);
 
 		spin_lock(&line->lock);
 		WARN_ON(line->state != PBLK_LINESTATE_CLOSED);
+		pr_info("%s():LINESTATE: line id %d state = %d change to _GC\n",__func__, line->id, line->state);
 		line->state = PBLK_LINESTATE_GC;
 		trace_pblk_line_state(pblk_disk_name(pblk), line->id,
 					line->state);
