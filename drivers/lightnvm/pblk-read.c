@@ -598,6 +598,8 @@ int pblk_submit_read_gc(struct pblk *pblk, struct pblk_gc_rq *gc_rq)
 	memset(&rqd, 0, sizeof(struct nvm_rq));
 
 	ret = pblk_alloc_rqd_meta(pblk, &rqd);
+
+	pr_info("%s():begin\n",__func__);
 	if (ret)
 		return ret;
 
@@ -616,6 +618,8 @@ int pblk_submit_read_gc(struct pblk *pblk, struct pblk_gc_rq *gc_rq)
 
 	if (!(gc_rq->secs_to_gc))
 		goto out;
+
+	// get number of secs we need to GC.
 
 	data_len = (gc_rq->secs_to_gc) * geo->csecs;
 	bio = pblk_bio_map_addr(pblk, gc_rq->data, gc_rq->secs_to_gc, data_len,

@@ -25,13 +25,20 @@ int pblk_recov_check_emeta(struct pblk *pblk, struct line_emeta *emeta_buf)
 {
 	u32 crc;
 
+//	return 0;
+
 	crc = pblk_calc_emeta_crc(pblk, emeta_buf);
-	if (le32_to_cpu(emeta_buf->crc) != crc)
+	if (le32_to_cpu(emeta_buf->crc) != crc) {
+		pr_info("%s():crc mismatch\n",__func__);
 		return 1;
+	}
 
-	if (le32_to_cpu(emeta_buf->header.identifier) != PBLK_MAGIC)
+	if (le32_to_cpu(emeta_buf->header.identifier) != PBLK_MAGIC) {
+		pr_info("%s():header id mismatch\n",__func__);
 		return 1;
+	}
 
+	pr_info("%s():\n",__func__);
 	return 0;
 }
 
