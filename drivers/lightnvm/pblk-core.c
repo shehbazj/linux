@@ -181,8 +181,14 @@ void __pblk_map_invalidate(struct pblk *pblk, struct pblk_line *line,
 	}
 	le32_add_cpu(line->vsc, -1);
 
-	if (line->state == PBLK_LINESTATE_CLOSED)
+	// select a list from the many available lists - gc_full, 
+	// gc_high, gc_mid, gc_low, gc_empty, corrupt lists - to place
+	// current line into.
+
+	if (line->state == PBLK_LINESTATE_CLOSED) {
+		pr_info("%s():line is closed\n", __func__);
 		move_list = pblk_line_gc_list(pblk, line);
+	}
 	spin_unlock(&line->lock);
 
 	if (move_list) {
@@ -414,36 +420,43 @@ struct list_head *pblk_line_gc_list(struct pblk *pblk, struct pblk_line *line)
 
 	if (line->w_err_gc->has_write_err) {
 		if (line->gc_group != PBLK_LINEGC_WERR) {
+			pr_info("%s():line=%d ERR\n", __func__, line->id);
 			line->gc_group = PBLK_LINEGC_WERR;
 			move_list = &l_mg->gc_werr_list;
 			pblk_rl_werr_line_in(&pblk->rl);
 		}
 	} else if (!vsc) {
 		if (line->gc_group != PBLK_LINEGC_FULL) {
+			pr_info("%s():line=%d FULL\n", __func__, line->id);
 			line->gc_group = PBLK_LINEGC_FULL;
 			move_list = &l_mg->gc_full_list;
 		}
 	} else if (vsc < lm->high_thrs) {
 		if (line->gc_group != PBLK_LINEGC_HIGH) {
+			pr_info("%s():line=%d HIGH\n", __func__, line->id);
 			line->gc_group = PBLK_LINEGC_HIGH;
 			move_list = &l_mg->gc_high_list;
 		}
 	} else if (vsc < lm->mid_thrs) {
 		if (line->gc_group != PBLK_LINEGC_MID) {
+			pr_info("%s():line=%d MID\n", __func__, line->id);
 			line->gc_group = PBLK_LINEGC_MID;
 			move_list = &l_mg->gc_mid_list;
 		}
 	} else if (vsc < line->sec_in_line) {
 		if (line->gc_group != PBLK_LINEGC_LOW) {
+			pr_info("%s():line=%d LOW\n", __func__, line->id);
 			line->gc_group = PBLK_LINEGC_LOW;
 			move_list = &l_mg->gc_low_list;
 		}
 	} else if (vsc == line->sec_in_line) {
 		if (line->gc_group != PBLK_LINEGC_EMPTY) {
+			pr_info("%s():line=%d EMPTY\n", __func__, line->id);
 			line->gc_group = PBLK_LINEGC_EMPTY;
 			move_list = &l_mg->gc_empty_list;
 		}
 	} else {
+		pr_info("%s():LINESTATE: line=%d CORRUPT\n", __func__, line->id);
 		line->state = PBLK_LINESTATE_CORRUPT;
 		trace_pblk_line_state(pblk_disk_name(pblk), line->id,
 					line->state);
@@ -1829,6 +1842,7 @@ static void __pblk_line_put(struct pblk *pblk, struct pblk_line *line)
 	struct pblk_gc *gc = &pblk->gc;
 
 	spin_lock(&line->lock);
+	pr_info("%s():LINESTATE : line id = %d state = %d\n", __func__, line->id, line->state);
 	WARN_ON(line->state != PBLK_LINESTATE_GC);
 	line->state = PBLK_LINESTATE_FREE;
 	trace_pblk_line_state(pblk_disk_name(pblk), line->id,
@@ -1978,13 +1992,17 @@ void pblk_line_close(struct pblk *pblk, struct pblk_line *line)
 	int i;
 	int num_luns = geo->all_luns;
 
+	int min_write_pgs = 8;
+	// XXX change to min_write_pages
+
 #ifdef CONFIG_NVM_PBLK_DEBUG
-	if(!bitmap_full(line->map_bitmap, lm->sec_per_line)) {
-		for(i = 0 ; i < num_luns ; i++) {
-			while(line->cur_secs[i] < ((1 + i) * pblk->lm.sec_per_line_per_lun)) {
-				test_and_set_bit(line->cur_secs[i]++, line->map_bitmap);
-			}
-		}
+	int next = 0;
+	while(!bitmap_full(line->map_bitmap, lm->sec_per_line)) {
+		next = find_next_zero_bit(line->map_bitmap,lm->sec_per_line, next);
+		test_and_set_bit(next, line->map_bitmap);
+	}
+	for (i = 0; i < num_luns ; i++) {
+		line->cur_secs[i] = lm->sec_per_line - (num_luns - i + 1) * min_write_pgs;
 	}
 	WARN_ON(!bitmap_full(line->map_bitmap, lm->sec_per_line));
 #endif
@@ -1997,6 +2015,7 @@ void pblk_line_close(struct pblk *pblk, struct pblk_line *line)
 	spin_lock(&l_mg->gc_lock);
 	spin_lock(&line->lock);
 	WARN_ON(line->state != PBLK_LINESTATE_OPEN);
+	pr_info("%s():LINESTATE:changing line %d state from %d to CLOSED\n", __func__, line-> id, line-> state);
 	line->state = PBLK_LINESTATE_CLOSED;
 	move_list = pblk_line_gc_list(pblk, line);
 	list_add_tail(&line->list, move_list);
