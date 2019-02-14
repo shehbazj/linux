@@ -979,6 +979,8 @@ int pblk_line_emeta_read(struct pblk *pblk, struct pblk_line *line,
 	int i, j;
 	int ret;
 
+	pr_info("%s():lm->emeta_sec[0]=%d\n", __func__, lm->emeta_sec[0]);
+	pr_info("%s():line->emeta_ssec=%llu,line_id=%d\n", __func__, line->emeta_ssec, line_id);
 	meta_list = nvm_dev_dma_alloc(dev->parent, GFP_KERNEL,
 							&dma_meta_list);
 	if (!meta_list)
@@ -993,9 +995,11 @@ next_rq:
 	rq_ppas = pblk_calc_secs(pblk, left_ppas, 0, false);
 	rq_len = rq_ppas * geo->csecs;
 
+	pr_info("%s():rq_ppas = %d rq_len = %d\n", __func__,rq_ppas, rq_len);
 	bio = pblk_bio_map_addr(pblk, emeta_buf, rq_ppas, rq_len,
 					l_mg->emeta_alloc_type, GFP_KERNEL);
 	if (IS_ERR(bio)) {
+		pr_info("%s():BIO error\n", __func__);
 		ret = PTR_ERR(bio);
 		goto free_rqd_dma;
 	}
@@ -1015,14 +1019,17 @@ next_rq:
 		struct ppa_addr ppa = addr_to_gen_ppa(pblk, paddr, line_id);
 		int pos = pblk_ppa_to_pos(geo, ppa);
 
-		if (pblk_io_aligned(pblk, rq_ppas))
+		if (pblk_io_aligned(pblk, rq_ppas)) {
+			pr_info("%s(): io is aligned\n",__func__);
 			rqd.is_seq = 1;
+		}
 
 		while (test_bit(pos, line->blk_bitmap)) {
 			paddr += min;
 			if (pblk_boundary_paddr_checks(pblk, paddr)) {
 				bio_put(bio);
 				ret = -EINTR;
+				pr_info("%s():failed boundary paddr check\n",__func__);
 				goto free_rqd_dma;
 			}
 
@@ -1031,6 +1038,7 @@ next_rq:
 		}
 
 		if (pblk_boundary_paddr_checks(pblk, paddr + min)) {
+			pr_info("%s():failed boundary paddr check for paddr+min\n",__func__);
 			bio_put(bio);
 			ret = -EINTR;
 			goto free_rqd_dma;
@@ -1040,12 +1048,17 @@ next_rq:
 			rqd.ppa_list[i] = addr_to_gen_ppa(pblk, paddr, line_id);
 	}
 
+	pr_info("%s():for loop end successful\n",__func__);
+
 	ret = pblk_submit_io_sync(pblk, &rqd);
 	if (ret) {
 		pblk_err(pblk, "emeta I/O submission failed: %d\n", ret);
 		bio_put(bio);
 		goto free_rqd_dma;
-	}
+	} else {
+		pr_info("%s():emeta I/O submission successful.\n",__func__);
+	}	
+		
 
 	atomic_dec(&pblk->inflight_io);
 
@@ -1309,6 +1322,8 @@ static int pblk_line_init_bb(struct pblk *pblk, struct pblk_line *line,
 	 * blocks to make sure that there are enough sectors to store emeta
 	 */
 	emeta_secs = lm->emeta_sec[0];
+	pr_info("%s():emeta_secs = %d = lm->emeta_sec[0] = %d\n", __func__, emeta_secs, lm->emeta_sec[0]);
+
 	off = lm->sec_per_line;
 	while (emeta_secs) {
 		off -= geo->ws_opt;
@@ -2078,8 +2093,14 @@ void pblk_line_close_meta(struct pblk *pblk, struct pblk_line *line)
 	/* Update the in-memory start address for emeta, in case it has
 	 * shifted due to write errors
 	 */
-	if (line->emeta_ssec != line->cur_sec)
-		line->emeta_ssec = line->cur_sec;
+
+//       if (line->emeta_ssec != line->cur_sec) {
+//               pr_info("%s():adjusting line->emeta_ssec %llu to cur_sec %d\n",__func__, line->emeta_ssec, line->cur_sec);  
+//                line->emeta_ssec = line->cur_sec;
+//       } else {
+//               pr_info("%s():line->emeta_ssec = cur_sec %d\n",__func__, line->cur_sec);
+//       }
+
 
 	list_add_tail(&line->list, &l_mg->emeta_list);
 	spin_unlock(&line->lock);
