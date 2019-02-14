@@ -60,6 +60,7 @@ static int pblk_recov_l2p_from_emeta(struct pblk *pblk, struct pblk_line *line)
 
 	data_start = pblk_line_smeta_start(pblk, line) + lm->smeta_sec;
 	data_end = line->emeta_ssec;
+	pr_info("%s():emeta_ssec %llu\n", __func__, line->emeta_ssec);
 	nr_valid_lbas = le64_to_cpu(emeta_buf->nr_valid_lbas);
 
 	for (i = data_start; i < data_end; i++) {

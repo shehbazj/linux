@@ -416,6 +416,7 @@ int pblk_submit_meta_io(struct pblk *pblk, struct pblk_line *meta_line)
 
 	pr_info("%s():rq_ppas = %d, geo->csecs = %d, rq_len = %d\n",__func__,rq_ppas, geo->csecs, rq_len);
 
+	pr_info("%s():emeta->mem=%d\n", emeta->mem);
 	data = ((void *)emeta->buf) + emeta->mem;
 
 	bio = pblk_bio_map_addr(pblk, data, rq_ppas, rq_len,
