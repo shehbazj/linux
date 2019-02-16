@@ -399,7 +399,8 @@ int pblk_submit_meta_io(struct pblk *pblk, struct pblk_line *meta_line)
 	void *data;
 	// XXX introducing paddr_list of size 20. this is hardcoded.
 	// change this to rq_ppas.
-	u64 paddr_list[20];
+	u64 paddr;
+//	u64 paddr_list[20];
 	// min_write_pgs = 8
 	int rq_ppas = pblk->min_write_pgs;
 	int id = meta_line->id;
@@ -416,7 +417,7 @@ int pblk_submit_meta_io(struct pblk *pblk, struct pblk_line *meta_line)
 
 	pr_info("%s():rq_ppas = %d, geo->csecs = %d, rq_len = %d\n",__func__,rq_ppas, geo->csecs, rq_len);
 
-	pr_info("%s():emeta->mem=%d\n", emeta->mem);
+	pr_info("%s():emeta->mem=%d\n",__func__, emeta->mem);
 	data = ((void *)emeta->buf) + emeta->mem;
 
 	bio = pblk_bio_map_addr(pblk, data, rq_ppas, rq_len,
@@ -442,22 +443,24 @@ int pblk_submit_meta_io(struct pblk *pblk, struct pblk_line *meta_line)
 	// XXX allocation scheme is hardcoded for now, this allocation scheme 
 	// makes sure that all meta pages are allocated from the first PU.
 
-	int allocation_scheme[] = {rq_ppas, 0, 0, 0};
+	if(meta_line->cur_sec < 16344) {
+		pr_info("%s():readjusting cur_sec for id=%d from %d to 16344\n", __func__, id, meta_line->cur_sec);
+		meta_line->cur_sec = 16344;
+	} else {
+		pr_info("%s():line->cur_sec = %d\n", __func__,meta_line->cur_sec);
+	}
 	for (i = 0; i < rqd->nr_ppas; ) {
 		spin_lock(&meta_line->lock);
-		__pblk_alloc_page_mdata(pblk, meta_line, allocation_scheme, paddr_list, rq_ppas);
+		paddr = __pblk_alloc_page(pblk, meta_line, rq_ppas);
 		spin_unlock(&meta_line->lock);
-		for (j = 0; j < rq_ppas; j++, i++)
-			ppa_list[i] = addr_to_gen_ppa(pblk, paddr_list[j], id);
+		for (j = 0; j < rq_ppas; j++, i++, paddr++)
+			ppa_list[i] = addr_to_gen_ppa(pblk, paddr, id);
 	}
 
 	spin_lock(&l_mg->close_lock);
 	emeta->mem += rq_len;
-	if (emeta->mem >= lm->emeta_len[0]) {
-		pr_info("%s():delete list from meta_line\n",__func__);
-		pr_info("%s():emeta->mem = %d lm->emeta_len[0] = %d\n", __func__, emeta->mem, lm->emeta_len[0]);
+	if (emeta->mem >= lm->emeta_len[0])
 		list_del(&meta_line->list);
-	}
 	spin_unlock(&l_mg->close_lock);
 
 	pblk_down_chunk(pblk, ppa_list[0]);
