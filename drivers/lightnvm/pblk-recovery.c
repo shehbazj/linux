@@ -25,8 +25,6 @@ int pblk_recov_check_emeta(struct pblk *pblk, struct line_emeta *emeta_buf)
 {
 	u32 crc;
 
-//	return 0;
-
 	crc = pblk_calc_emeta_crc(pblk, emeta_buf);
 	if (le32_to_cpu(emeta_buf->crc) != crc) {
 		pr_info("%s():crc mismatch\n",__func__);

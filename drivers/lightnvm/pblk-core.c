@@ -186,7 +186,6 @@ void __pblk_map_invalidate(struct pblk *pblk, struct pblk_line *line,
 	// current line into.
 
 	if (line->state == PBLK_LINESTATE_CLOSED) {
-		pr_info("%s():line is closed\n", __func__);
 		move_list = pblk_line_gc_list(pblk, line);
 	}
 	spin_unlock(&line->lock);
@@ -740,9 +739,9 @@ void __pblk_alloc_page_data(struct pblk *pblk, struct pblk_line *line, int *nr_s
 	// check if cur_secs for lun + nr_secs does not exceed total sectors
 	// allocated to the lun
 	for (lun = 0 ; lun < total_luns ; lun++) {
-		if ( line->cur_secs[lun] + nr_secs_per_lun[lun] + 256 > pblk->lm.sec_per_line)
+		if ( line->cur_secs[lun] + nr_secs_per_lun[lun] + 40 > pblk->lm.sec_per_line)
 		{
-			WARN(1, "pblk: page allocation out of bounds cur secs = %d lun = %d nr_secs_per_lun %d pblk->lm.sec_per_line_per_lun %d\n", line->cur_secs[lun], lun, nr_secs_per_lun[lun], pblk->lm.sec_per_line_per_lun);
+			WARN(1, "pblk: page allocation out of bounds cur secs = %d lun = %d nr_secs_per_lun %d\n", line->cur_secs[lun], lun, nr_secs_per_lun[lun]);
 			nr_secs_per_lun[lun] = pblk->lm.sec_per_line - line->cur_secs[lun];
 		}
 		
@@ -1968,23 +1967,20 @@ int pblk_line_is_full(struct pblk_line *line, struct pblk *pblk)
 	int total_luns = geo->all_luns;
 	
 	if (line->left_msecs == 0) {
-		pr_info("%s(): left_msecs == 0 return 1\n", __func__);
+		pr_info("%s():line full: left_msecs == 0\n", __func__);
 		return 1;
 	}
 
-	// XXX change 128 to nr_secs, the minimum number of sectors
-	// sent to pblk to be written.
-	// each of the cur_secs would have reached the end of the sector, since 
-	// they are skewed only by 32 sectors...
+	// check if any cur_secs have reached upto 40 sectors.
 
 	for (i = 0; i < total_luns ; i++) {
-		if(line->cur_secs[i] + 256 > pblk->lm.sec_per_line) {
-			pr_info("%s(): return 1 cur_secs [%d]=%d\n", __func__, i, line->cur_secs[i]);
+		if(line->cur_secs[i] + 40 + 32 > pblk->lm.sec_per_line) {
+			pr_info("%s():line full %d: cur_secs=%d %d %d %d\n", __func__, i, line->cur_secs[0],line->cur_secs[1], line->cur_secs[2], line->cur_secs[3]);
 			return 1;
 		}
 	}
 	
-	pr_info("%s(): return 0\n", __func__);
+	pr_info("%s():line not full cur_secs= %d %d %d %d\n", __func__, line->cur_secs[0], line->cur_secs[1], line->cur_secs[2], line->cur_secs[3]);
 	return 0;
 }
 
@@ -1993,7 +1989,8 @@ static void pblk_line_should_sync_meta(struct pblk *pblk)
 	if (pblk_rl_is_limit(&pblk->rl)) {
 		pblk_line_close_meta_sync(pblk);
 	} else {
-		pr_info("did not close meta sync\n");
+		pr_info("did not close meta sync, forceful closure\n");
+		pblk_line_close_meta_sync(pblk);
 	}
 }
 
@@ -2098,7 +2095,7 @@ void pblk_line_close_meta(struct pblk *pblk, struct pblk_line *line)
 //               pr_info("%s():adjusting line->emeta_ssec %llu to cur_sec %d\n",__func__, line->emeta_ssec, line->cur_sec);  
 //                line->emeta_ssec = line->cur_sec;
 //       } else {
-//               pr_info("%s():line->emeta_ssec = cur_sec %d\n",__func__, line->cur_sec);
+               pr_info("%s():line->emeta_ssec %llu, cur_sec %d\n",__func__, line->emeta_ssec, line->cur_sec);
 //       }
 
 
