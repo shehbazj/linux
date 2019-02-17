@@ -359,6 +359,8 @@ static int pblk_setup_w_rq(struct pblk *pblk, struct nvm_rq *rqd,
 							valid, 0);
 	} else {
 		// if erase line is not erased yet, erase current blocks
+		pr_info("%s(): e_line->left_eblks = %llu\n", __func__, atomic_read(&e_line->left_eblks));
+		pr_info("%s(): calling pblk_map_erase_rq, sentry=%d valid=%d \n", __func__, c_ctx->sentry, valid);
 		ret = pblk_map_erase_rq(pblk, rqd, c_ctx->sentry, lun_bitmap,
 							valid, erase_ppa);
 	}
