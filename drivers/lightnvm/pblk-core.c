@@ -491,19 +491,16 @@ void pblk_log_read_err(struct pblk *pblk, struct nvm_rq *rqd)
 {
 	/* Empty page read is not necessarily an error (e.g., L2P recovery) */
 	if (rqd->error == NVM_RSP_ERR_EMPTYPAGE) {
-		pr_info("NVM_RSP_ERR_EMPTYPAGE\n");
 		atomic_long_inc(&pblk->read_empty);
 		return;
 	}
 
 	switch (rqd->error) {
 	case NVM_RSP_WARN_HIGHECC:
-		pr_info("NVM_RSP_WARN_HIGHECC\n");
 		atomic_long_inc(&pblk->read_high_ecc);
 		break;
 	case NVM_RSP_ERR_FAILECC:
 	case NVM_RSP_ERR_FAILCRC:
-		pr_info("NVM_RSP_ERR_FAILCRC, NVM_RSP_ERR_FAILECC\n");
 		atomic_long_inc(&pblk->read_failed);
 		break;
 	default:
@@ -1134,6 +1131,7 @@ int pblk_line_erase(struct pblk *pblk, struct pblk_line *line)
 		}
 	} while (1);
 
+	pr_info("%s():line %d left_eblks %d\n",__func__, line->id, atomic_read(&line->left_eblks));
 	return 0;
 }
 
@@ -1321,7 +1319,7 @@ static int pblk_line_init_bb(struct pblk *pblk, struct pblk_line *line,
 	 * blocks to make sure that there are enough sectors to store emeta
 	 */
 	emeta_secs = lm->emeta_sec[0];
-	pr_info("%s():emeta_secs = %d = lm->emeta_sec[0] = %d\n", __func__, emeta_secs, lm->emeta_sec[0]);
+//	pr_info("%s():emeta_secs = %d = lm->emeta_sec[0] = %d\n", __func__, emeta_secs, lm->emeta_sec[0]);
 
 	off = lm->sec_per_line;
 	while (emeta_secs) {
@@ -1417,7 +1415,7 @@ static int pblk_line_prepare(struct pblk *pblk, struct pblk_line *line)
 	line->state = PBLK_LINESTATE_OPEN;
 	trace_pblk_line_state(pblk_disk_name(pblk), line->id,
 				line->state);
-
+	pr_info("%s():line %d left_eblks =%d\n",__func__, line->id, blk_to_erase);
 	atomic_set(&line->left_eblks, blk_to_erase);
 	atomic_set(&line->left_seblks, blk_to_erase);
 
@@ -1772,21 +1770,17 @@ struct pblk_line *pblk_line_replace_data(struct pblk *pblk)
 	struct pblk_line *cur, *new = NULL;
 	unsigned int left_seblks;
 
-	pr_info("%s():enter\n", __func__);
 	new = l_mg->data_next;
 	if (!new)
 		goto out;
 
-	pr_info("%s():%d acquire lock\n", __func__, __LINE__);
 	spin_lock(&l_mg->free_lock);
 	cur = l_mg->data_line;
 	l_mg->data_line = new;
 
-	pr_info("%s():%d call setup line metadata\n", __func__, __LINE__);
 	pblk_line_setup_metadata(new, l_mg, &pblk->lm);
 	spin_unlock(&l_mg->free_lock);
 
-	pr_info("%s():%d unlock\n", __func__, __LINE__);
 retry_erase:
 	left_seblks = atomic_read(&new->left_seblks);
 	if (left_seblks) {
@@ -1797,24 +1791,18 @@ retry_erase:
 		} else {
 			io_schedule();
 		}
-		pr_info("%s():%d retry_erase\n", __func__, __LINE__);
 		goto retry_erase;
 	}
 
-	pr_info("%s():%d check for alloc bitmaps\n", __func__, __LINE__);
 	if (pblk_line_alloc_bitmaps(pblk, new)) {
-		pr_info("%s():%d return null\n", __func__, __LINE__);
 		return NULL;
 	}
-	pr_info("%s():%d done checking\n", __func__, __LINE__);
 retry_setup:
-	pr_info("%s():%d init metadata\n", __func__, __LINE__);
 	if (!pblk_line_init_metadata(pblk, new, cur)) {
 		new = pblk_line_retry(pblk, new);
 		if (!new)
 			goto out;
 
-		pr_info("%s():%d retry_setup1\n", __func__, __LINE__);
 		goto retry_setup;
 	}
 
@@ -1823,7 +1811,6 @@ retry_setup:
 		if (!new)
 			goto out;
 
-		pr_info("%s():%d retry_setup2n", __func__, __LINE__);
 		goto retry_setup;
 	}
 
@@ -1846,7 +1833,6 @@ retry_setup:
 	spin_unlock(&l_mg->free_lock);
 
 out:
-	pr_info("%s():exit\n",__func__);
 	return new;
 }
 
@@ -1856,7 +1842,6 @@ static void __pblk_line_put(struct pblk *pblk, struct pblk_line *line)
 	struct pblk_gc *gc = &pblk->gc;
 
 	spin_lock(&line->lock);
-	pr_info("%s():LINESTATE : line id = %d state = %d\n", __func__, line->id, line->state);
 	WARN_ON(line->state != PBLK_LINESTATE_GC);
 	line->state = PBLK_LINESTATE_FREE;
 	trace_pblk_line_state(pblk_disk_name(pblk), line->id,
@@ -1974,7 +1959,7 @@ int pblk_line_is_full(struct pblk_line *line, struct pblk *pblk)
 	// check if any cur_secs have reached upto 40 sectors.
 
 	for (i = 0; i < total_luns ; i++) {
-		if(line->cur_secs[i] + 40 + 32 > pblk->lm.sec_per_line) {
+		if(line->cur_secs[i] + 256 > pblk->lm.sec_per_line) {
 			pr_info("%s():line full %d: cur_secs=%d %d %d %d\n", __func__, i, line->cur_secs[0],line->cur_secs[1], line->cur_secs[2], line->cur_secs[3]);
 			return 1;
 		}
@@ -2021,7 +2006,6 @@ void pblk_line_close(struct pblk *pblk, struct pblk_line *line)
 
 	spin_lock(&l_mg->free_lock);
 	WARN_ON(!test_and_clear_bit(line->meta_line, &l_mg->meta_bitmap));
-	pr_info("%s():cleared bit %d\n", __func__, line->meta_line);
 	spin_unlock(&l_mg->free_lock);
 
 	spin_lock(&l_mg->gc_lock);
@@ -2061,7 +2045,6 @@ void pblk_line_close_meta(struct pblk *pblk, struct pblk_line *line)
 	struct line_emeta *emeta_buf = emeta->buf;
 	struct wa_counters *wa = emeta_to_wa(lm, emeta_buf);
 
-	pr_info("%s():enter\n",__func__);
 	/* No need for exact vsc value; avoid a big line lock and take aprox. */
 	memcpy(emeta_to_vsc(pblk, emeta_buf), l_mg->vsc_list, lm->vsc_list_len);
 	memcpy(emeta_to_bb(emeta_buf), line->blk_bitmap, lm->blk_bitmap_len);
@@ -2104,7 +2087,6 @@ void pblk_line_close_meta(struct pblk *pblk, struct pblk_line *line)
 	spin_unlock(&l_mg->close_lock);
 
 	pblk_line_should_sync_meta(pblk);
-	pr_info("%s():exit\n",__func__);
 }
 
 static void pblk_save_lba_list(struct pblk *pblk, struct pblk_line *line)
@@ -2135,7 +2117,6 @@ void pblk_line_close_ws(struct work_struct *work)
 	if (w_err_gc->has_write_err)
 		pblk_save_lba_list(pblk, line);
 
-	pr_info("%s():calling pblk_line_close()\n", __func__);
 	pblk_line_close(pblk, line);
 	mempool_free(line_ws, &pblk->gen_ws_pool);
 }
