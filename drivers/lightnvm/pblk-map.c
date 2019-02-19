@@ -151,7 +151,7 @@ int pblk_map_rq(struct pblk *pblk, struct nvm_rq *rqd, unsigned int sentry,
 	int i;
 	int ret;
 
-	pr_info("%s():init\n",__func__);
+//	pr_info("%s():init\n",__func__);
 	for (i = off; i < rqd->nr_ppas; i += min) {
 		// keep mapping min secs at a time. other than the last
 		// write where we map only valid secs % min.
@@ -167,7 +167,7 @@ int pblk_map_rq(struct pblk *pblk, struct nvm_rq *rqd, unsigned int sentry,
 		}
 	}
 
-	pr_info("%s():exit\n",__func__);
+//	pr_info("%s():exit\n",__func__);
 	return 0;
 }
 
@@ -188,15 +188,20 @@ int pblk_map_erase_rq(struct pblk *pblk, struct nvm_rq *rqd,
 	int i, erase_lun;
 	int ret;
 
-
+	pr_info("%s():nr_ppas=%d\n",__func__,rqd->nr_ppas);
 	for (i = 0; i < rqd->nr_ppas; i += min) {
 		map_secs = (i + min > valid_secs) ? (valid_secs % min) : min;
+		// get meta for only 1 ppa.
+		pr_info("%s():pblk_sec meta size %lu oobsize %d\n",__func__,sizeof(struct pblk_sec_meta), pblk->oob_meta_size);
 		meta_buffer = pblk_get_meta(pblk, meta_list, i);
-
+		// map sectors after sentry in write context - sentry + i
+		// of size map_secs.	
 		ret = pblk_map_page_data(pblk, sentry + i, &ppa_list[i],
 					lun_bitmap, meta_buffer, map_secs);
-		if (ret)
+		if (ret) {
+			pr_info("%s():failed to map page data\n",__func__);
 			return ret;
+		}
 
 		erase_lun = pblk_ppa_to_pos(geo, ppa_list[i]);
 
@@ -204,12 +209,17 @@ int pblk_map_erase_rq(struct pblk *pblk, struct nvm_rq *rqd,
 		 * last line.
 		 */
 		e_line = pblk_line_get_erase(pblk);
-		if (!e_line)
+		if (!e_line) {
+			pr_info("%s():did not get erase line call and return pblk_map_rq\n",__func__);
 			return pblk_map_rq(pblk, rqd, sentry, lun_bitmap,
 							valid_secs, i + min);
+		}else {
+			pr_info("%s():got next erase line %d\n", __func__,e_line->id);
+		}
 
 		spin_lock(&e_line->lock);
 		if (!test_bit(erase_lun, e_line->erase_bitmap)) {
+			pr_info("%s():erase_lun %d was unset\n", __func__, erase_lun);
 			set_bit(erase_lun, e_line->erase_bitmap);
 			atomic_dec(&e_line->left_eblks);
 
@@ -226,20 +236,23 @@ int pblk_map_erase_rq(struct pblk *pblk, struct nvm_rq *rqd,
 	}
 
 	d_line = pblk_line_get_data(pblk);
+	pr_info("%s():data line = %d\n",__func__, d_line->id);
 
 	/* line can change after page map. We might also be writing the
 	 * last line.
 	 */
 	e_line = pblk_line_get_erase(pblk);
+	pr_info("%s():erase line = %d\n",__func__, e_line->id);
 	if (!e_line)
 		return -ENOSPC;
 
 	/* Erase blocks that are bad in this line but might not be in next */
-	if (unlikely(pblk_ppa_empty(*erase_ppa)) &&
-			bitmap_weight(d_line->blk_bitmap, lm->blk_per_line)) {
+	if (unlikely(pblk_ppa_empty(*erase_ppa)) && 
+		bitmap_weight(d_line->blk_bitmap, lm->blk_per_line)) {
 		int bit = -1;
 
 retry:
+		pr_info("%s():retry\n",__func__);
 		bit = find_next_bit(d_line->blk_bitmap,
 						lm->blk_per_line, bit + 1);
 		if (bit >= lm->blk_per_line)
@@ -256,6 +269,8 @@ retry:
 		atomic_dec(&e_line->left_eblks);
 		*erase_ppa = pblk->luns[bit].bppa; /* set ch and lun */
 		erase_ppa->a.blk = e_line->id;
+	}else {
+		pr_info("%s():exit():bitmap weight %d\n",__func__, bitmap_weight(d_line->blk_bitmap, lm->blk_per_line));
 	}
 
 	return 0;
