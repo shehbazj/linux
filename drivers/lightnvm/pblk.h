@@ -1154,7 +1154,7 @@ static inline void pblk_trans_map_set(struct pblk *pblk, sector_t lba,
 	if (pblk->addrf_len < 32) {
 		u32 *map = (u32 *)pblk->trans_map;
 		map[lba] = pblk_ppa64_to_ppa32(pblk, ppa);
-		pr_info("%s():lba=%lu secs %d chnls %d luns %d secs %d\n",__func__, lba, ppa.m.sec, ppa.m.grp, ppa.m.pu, ppa.m.sec);
+//		pr_info("%s():lba=%lu secs %d chnls %d luns %d secs %d\n",__func__, lba, ppa.m.sec, ppa.m.grp, ppa.m.pu, ppa.m.sec);
 	} else {
 		u64 *map = (u64 *)pblk->trans_map;
 

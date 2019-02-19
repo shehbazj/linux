@@ -359,8 +359,8 @@ static int pblk_setup_w_rq(struct pblk *pblk, struct nvm_rq *rqd,
 							valid, 0);
 	} else {
 		// if erase line is not erased yet, erase current blocks
-		pr_info("%s(): e_line->left_eblks = %llu\n", __func__, atomic_read(&e_line->left_eblks));
-		pr_info("%s(): calling pblk_map_erase_rq, sentry=%d valid=%d \n", __func__, c_ctx->sentry, valid);
+		pr_info("%s(): e_line->left_eblks = %d\n", __func__, atomic_read(&e_line->left_eblks));
+		pr_info("%s(): calling pblk_map_erase_rq, sentry=%d valid=%d lun size=%d\n", __func__, c_ctx->sentry, valid, lm->lun_bitmap_len);
 		ret = pblk_map_erase_rq(pblk, rqd, c_ctx->sentry, lun_bitmap,
 							valid, erase_ppa);
 	}
@@ -545,27 +545,18 @@ static struct pblk_line *pblk_should_submit_meta_io(struct pblk *pblk,
 	spin_lock(&l_mg->close_lock);
 	if (list_empty(&l_mg->emeta_list)) {
 		spin_unlock(&l_mg->close_lock);
-		pr_info("%s():emeta list empty\n",__func__);
 		return NULL;
 	}
 	meta_line = list_first_entry(&l_mg->emeta_list, struct pblk_line, list);
 	if (meta_line->emeta->mem >= lm->emeta_len[0]) {
 		spin_unlock(&l_mg->close_lock);
-		pr_info("%s():meta_line->emeta->mem = %d lm->emeta_len[0]=%d\n",__func__, meta_line->emeta->mem, lm->emeta_len[0]);
 		return NULL;
-	} else {
-		pr_info("%s():meta_line->emeta->mem = %d lm->emeta_len[0]=%d\n",__func__, meta_line->emeta->mem, lm->emeta_len[0]);
 	}
 	spin_unlock(&l_mg->close_lock);
 
 	if (!pblk_valid_meta_ppa(pblk, meta_line, data_rqd)) {
-		pr_info("%s():invalid meta ppa\n",__func__);
 		return NULL;
-	} else {
-               pr_info("%s():valid meta ppa\n",__func__);
-        }
-
-	pr_info("%s():returning meta_line %d\n", __func__,meta_line->id);
+	}
 	return meta_line;
 }
 
@@ -591,11 +582,11 @@ static int pblk_submit_io_set(struct pblk *pblk, struct nvm_rq *rqd)
 
 	// returns you a metadata line.
 	meta_line = pblk_should_submit_meta_io(pblk, rqd);
-	if(meta_line) {
-		pr_info("%s():metaline is not null\n",__func__);
-	}else {
-		pr_info("%s():metaline is null\n",__func__);
-	}
+//	if(meta_line) {
+//		pr_info("%s():metaline is not null\n",__func__);
+//	}else {
+//		pr_info("%s():metaline is null\n",__func__);
+//	}
 	
 	/* Submit data write for current data line */
 	err = pblk_submit_io(pblk, rqd);
@@ -620,7 +611,6 @@ static int pblk_submit_io_set(struct pblk *pblk, struct nvm_rq *rqd)
 
 	if (meta_line) {
 		/* Submit metadata write for previous data line */
-		pr_info("%s():calling pblk_submit_meta_io\n", __func__);
 		err = pblk_submit_meta_io(pblk, meta_line);
 		if (err) {
 			pblk_err(pblk, "metadata I/O submission failed: %d",
