@@ -33,7 +33,7 @@ static int pblk_gc_write(struct pblk *pblk)
 	struct pblk_gc *gc = &pblk->gc;
 	struct pblk_gc_rq *gc_rq, *tgc_rq;
 	LIST_HEAD(w_list);
-
+	pr_info("%s():begin\n",__func__);
 	spin_lock(&gc->w_lock);
 	if (list_empty(&gc->w_list)) {
 		spin_unlock(&gc->w_lock);
@@ -228,10 +228,12 @@ static void pblk_gc_line_prepare_ws(struct work_struct *work)
 
 	bit = -1;
 
-	// populate invalid bitmap completed.
-	pr_info("%s():invalid bitmap\n",__func__);
+	// populate invalid bitmap done.
 
+	pr_info("%s():line=%d vsc=%d invalid bitmap weight=%d\n",__func__, line->id, sec_left, __bitmap_weight(invalid_bitmap,lm->sec_per_line));
 next_rq:
+	// continue reading and creating gc_rq's with 32 sectors
+	// of valid blocks that need to be saved before GC'ing the sector
 	gc_rq = kmalloc(sizeof(struct pblk_gc_rq), GFP_KERNEL);
 	if (!gc_rq)
 		goto fail_free_lba_list;
@@ -251,9 +253,11 @@ next_rq:
 	} while (nr_secs < pblk->max_write_pgs);
 
 	if (unlikely(!nr_secs)) {
-		pr_info("%s():nr_secs was zero\n",__func__);
+		pr_info("%s():line=%d nr_secs was zero\n",__func__,line->id);
 		kfree(gc_rq);
 		goto out;
+	}else {
+		pr_info("%s():line=%d nr_secs=%d\n",__func__,line->id, nr_secs);
 	}
 
 	// nr_secs should be equal to max_write_pages here.
@@ -277,12 +281,12 @@ next_rq:
 
 	kref_get(&line->ref);
 
-	pr_info("%s():init pblk_gc_line_ws here\n", __func__);
 	INIT_WORK(&gc_rq_ws->ws, pblk_gc_line_ws);
 	queue_work(gc->gc_line_reader_wq, &gc_rq_ws->ws);
 
-	// remove max pages written from valid sector count...
+	// remove max pages written (32) from valid sector count.
 	sec_left -= nr_secs;
+	pr_info("%s():line=%d sec_left=%d\n",__func__,line->id,sec_left);
 	if (sec_left > 0)
 		goto next_rq;
 
@@ -291,11 +295,10 @@ out:
 	kfree(line_ws);
 	kfree(invalid_bitmap);
 
-	pr_info("%s():calling pblk_line_put\n",__func__);
 	kref_put(&line->ref, pblk_line_put);
 	atomic_dec(&gc->read_inflight_gc);
 
-	pr_info("%s(): no fail free scenario\n",__func__);
+	pr_info("%s():end GC. line=%d\n",__func__,line->id);
 	return;
 
 fail_free_gc_rq:
