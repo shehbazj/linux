@@ -984,6 +984,8 @@ static int pblk_line_meta_init(struct pblk *pblk)
 	lm->high_thrs = lm->sec_per_line / 4;
 	lm->meta_distance = (geo->all_luns / 2) * pblk->min_write_pgs;
 
+	pr_info("%s():sec_per_line=%d blk_per_line=%d blk_bitmap_len=%d sec_bitmap_len=%d lun_bitmap_len=%d", __func__, lm->sec_per_line, lm->blk_per_line, lm->blk_bitmap_len, lm->sec_bitmap_len, lm->lun_bitmap_len);
+
 	/* Calculate necessary pages for smeta. See comment over struct
 	 * line_smeta definition
 	 */
@@ -998,6 +1000,7 @@ add_smeta_page:
 		goto add_smeta_page;
 	}
 
+	pr_info("%s():smeta sec=%d smeta_len=%d lm->smeta_len=%d\n",__func__,lm->smeta_sec, smeta_len, lm->smeta_len);
 	/* Calculate necessary pages for emeta. See comment over struct
 	 * line_emeta definition
 	 */
@@ -1011,6 +1014,7 @@ add_emeta_page:
 		i++;
 		goto add_emeta_page;
 	}
+	pr_info("%s():emeta_len=%d lm->emeta_sec[0]=%d lm->emeta_len[0]=%d\n",__func__, emeta_len, lm->emeta_sec[0], lm->emeta_len[0]);
 
 	lm->emeta_bb = geo->all_luns > i ? geo->all_luns - i : 0;
 

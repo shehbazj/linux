@@ -736,7 +736,7 @@ void __pblk_alloc_page_data(struct pblk *pblk, struct pblk_line *line, int *nr_s
 	// check if cur_secs for lun + nr_secs does not exceed total sectors
 	// allocated to the lun
 	for (lun = 0 ; lun < total_luns ; lun++) {
-		if ( line->cur_secs[lun] + nr_secs_per_lun[lun] + 40 > pblk->lm.sec_per_line)
+		if ( line->cur_secs[lun] + nr_secs_per_lun[lun] + 256 > pblk->lm.sec_per_line)
 		{
 			WARN(1, "pblk: page allocation out of bounds cur secs = %d lun = %d nr_secs_per_lun %d\n", line->cur_secs[lun], lun, nr_secs_per_lun[lun]);
 			nr_secs_per_lun[lun] = pblk->lm.sec_per_line - line->cur_secs[lun];
@@ -1965,7 +1965,7 @@ int pblk_line_is_full(struct pblk_line *line, struct pblk *pblk)
 		}
 	}
 	
-	pr_info("%s():line not full cur_secs= %d %d %d %d\n", __func__, line->cur_secs[0], line->cur_secs[1], line->cur_secs[2], line->cur_secs[3]);
+//	pr_info("%s():line not full cur_secs= %d %d %d %d\n", __func__, line->cur_secs[0], line->cur_secs[1], line->cur_secs[2], line->cur_secs[3]);
 	return 0;
 }
 

@@ -172,6 +172,7 @@ int pblk_map_rq(struct pblk *pblk, struct nvm_rq *rqd, unsigned int sentry,
 }
 
 /* only if erase_ppa is set, acquire erase semaphore */
+// populates erase_ppa with ppas that need to be erased.
 int pblk_map_erase_rq(struct pblk *pblk, struct nvm_rq *rqd,
 		       unsigned int sentry, unsigned long *lun_bitmap,
 		       unsigned int valid_secs, struct ppa_addr *erase_ppa)
@@ -192,7 +193,6 @@ int pblk_map_erase_rq(struct pblk *pblk, struct nvm_rq *rqd,
 	for (i = 0; i < rqd->nr_ppas; i += min) {
 		map_secs = (i + min > valid_secs) ? (valid_secs % min) : min;
 		// get meta for only 1 ppa.
-		pr_info("%s():pblk_sec meta size %lu oobsize %d\n",__func__,sizeof(struct pblk_sec_meta), pblk->oob_meta_size);
 		meta_buffer = pblk_get_meta(pblk, meta_list, i);
 		// map sectors after sentry in write context - sentry + i
 		// of size map_secs.	
@@ -204,6 +204,8 @@ int pblk_map_erase_rq(struct pblk *pblk, struct nvm_rq *rqd,
 		}
 
 		erase_lun = pblk_ppa_to_pos(geo, ppa_list[i]);
+
+		pr_info("%s():bitmap len=%d\n",__func__,lm->blk_bitmap_len);
 
 		/* line can change after page map. We might also be writing the
 		 * last line.
@@ -228,9 +230,14 @@ int pblk_map_erase_rq(struct pblk *pblk, struct nvm_rq *rqd,
 
 			spin_unlock(&e_line->lock);
 
+			pr_info("%s():return after pblk_map_rq\n",__func__);
 			/* Avoid evaluating e_line->left_eblks */
 			return pblk_map_rq(pblk, rqd, sentry, lun_bitmap,
 							valid_secs, i + min);
+		} else {
+		 	pr_info("%s(): erase_bitmap for erase lun %d is set\n", __func__, erase_lun);
+		//	return pblk_map_rq(pblk, rqd, sentry, lun_bitmap,
+                //                                      valid_secs, i + min);
 		}
 		spin_unlock(&e_line->lock);
 	}
