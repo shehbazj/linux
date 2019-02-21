@@ -241,6 +241,7 @@ int pblk_map_erase_rq(struct pblk *pblk, struct nvm_rq *rqd,
 		}
 		spin_unlock(&e_line->lock);
 	}
+	return 0;
 
 	d_line = pblk_line_get_data(pblk);
 	pr_info("%s():data line = %d\n",__func__, d_line->id);

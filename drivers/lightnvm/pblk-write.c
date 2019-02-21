@@ -451,6 +451,8 @@ int pblk_submit_meta_io(struct pblk *pblk, struct pblk_line *meta_line)
 	} else {
 		pr_info("%s():line->cur_sec = %d\n", __func__,meta_line->cur_sec);
 	}
+
+	pr_info("%s():line=%d meta_line->cur_sec=%d\n",__func__,meta_line->id, meta_line->cur_sec);
 	for (i = 0; i < rqd->nr_ppas; ) {
 		spin_lock(&meta_line->lock);
 		paddr = __pblk_alloc_page(pblk, meta_line, rq_ppas);
