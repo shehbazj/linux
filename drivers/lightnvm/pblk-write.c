@@ -357,12 +357,14 @@ static int pblk_setup_w_rq(struct pblk *pblk, struct nvm_rq *rqd,
 		// device physical address takes place here....
 		ret = pblk_map_rq(pblk, rqd, c_ctx->sentry, lun_bitmap,
 							valid, 0);
+		pr_info("%s():returned from pblk_map_rq ret=%d\n",__func__, ret);
 	} else {
 		// if erase line is not erased yet, erase current blocks
 		pr_info("%s(): e_line->left_eblks = %d\n", __func__, atomic_read(&e_line->left_eblks));
 		pr_info("%s(): calling pblk_map_erase_rq, sentry=%d valid=%d lun size=%d\n", __func__, c_ctx->sentry, valid, lm->lun_bitmap_len);
 		ret = pblk_map_erase_rq(pblk, rqd, c_ctx->sentry, lun_bitmap,
 							valid, erase_ppa);
+		pr_info("%s():returned from pblk_erase_rq ret=%d\n",__func__, ret);
 	}
 
 	return ret;
@@ -453,6 +455,10 @@ int pblk_submit_meta_io(struct pblk *pblk, struct pblk_line *meta_line)
 	}
 
 	pr_info("%s():line=%d meta_line->cur_sec=%d\n",__func__,meta_line->id, meta_line->cur_sec);
+	if(meta_line->cur_sec < 16344) {
+		pr_info("%s():readjusting meta_line=%d cur_sec=%d to 16344\n",__func__, meta_line->id, meta_line->cur_sec);
+		meta_line->cur_sec = 16344;
+	}
 	for (i = 0; i < rqd->nr_ppas; ) {
 		spin_lock(&meta_line->lock);
 		paddr = __pblk_alloc_page(pblk, meta_line, rq_ppas);

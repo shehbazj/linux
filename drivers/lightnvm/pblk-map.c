@@ -53,8 +53,10 @@ static int pblk_map_page_data(struct pblk *pblk, unsigned int sentry,
 
 	BUG_ON(nr_secs > 20);
 
-	if (!line)
+	if (!line) {
+		pr_info("%s():%d no line return\n",__func__, __LINE__);
 		return -ENOSPC;
+	}
 
 	// line->left_msecs = 0, open new line.
 	if (pblk_line_is_full(line, pblk)) {
@@ -70,6 +72,7 @@ static int pblk_map_page_data(struct pblk *pblk, unsigned int sentry,
 		//pblk_line_close(pblk, prev_line);
 
 		if (!line) {
+			pr_info("%s():%d no line return\n",__func__, __LINE__);
 			pblk_pipeline_stop(pblk);
 			return -ENOSPC;
 		}
