@@ -195,6 +195,7 @@ void __pblk_map_invalidate(struct pblk *pblk, struct pblk_line *line,
 		spin_lock(&line->lock);
 		/* Prevent moving a line that has just been chosen for GC */
 		if (line->state == PBLK_LINESTATE_GC) {
+			pr_info("%s():XXX not moving line %d\n", __func__, line->id);
 			spin_unlock(&line->lock);
 			spin_unlock(&l_mg->gc_lock);
 			return;
@@ -1494,6 +1495,7 @@ void pblk_line_free(struct pblk_line *line)
 	struct pblk *pblk = line->pblk;
 	struct pblk_line_mgmt *l_mg = &pblk->l_mg;
 
+	pr_info("%s():free and reinit line %d\n",__func__, line->id);
 	mempool_free(line->map_bitmap, l_mg->bitmap_pool);
 	mempool_free(line->invalid_bitmap, l_mg->bitmap_pool);
 
@@ -1504,22 +1506,58 @@ struct pblk_line *pblk_line_get(struct pblk *pblk)
 {
 	struct pblk_line_mgmt *l_mg = &pblk->l_mg;
 	struct pblk_line_meta *lm = &pblk->lm;
-	struct pblk_line *line;
+	struct pblk_line *line, *min_refs_line;
 	int ret, bit;
+	int i;
+	unsigned min_refs=0;	
 
 	lockdep_assert_held(&l_mg->free_lock);
 
 retry:
 	if (list_empty(&l_mg->free_list)) {
 		pblk_err(pblk, "no free lines\n");
-		return NULL;
+		pr_info("force free pending lines\n");
+		min_refs_line = &pblk->lines[0];
+		for (i=0; i < 16; i++) {
+			unsigned tmp = atomic_read(((atomic_t *)(&pblk->lines[i].ref.refcount.refs)));
+			if(min_refs > tmp) {
+				min_refs = tmp;
+				min_refs_line = &pblk->lines[i];
+			}
+		}
+		pr_info("%s():line %d has min refs %d\n", __func__,min_refs_line->id,atomic_read(((atomic_t *)(&min_refs_line->ref.refcount.refs))));
+		while(atomic_read(((atomic_t *)(&min_refs_line->ref.refcount.refs))) > 1) {
+			kref_put(&min_refs_line->ref,pblk_line_put);
+				
+		}
+		
+		spin_unlock(&l_mg->free_lock);
+	//	spin_unlock(&min_refs_line->lock);
+
+		// last reference put.				
+		kref_put(&min_refs_line->ref,pblk_line_put);
+
+		pr_info("%s():line %d refcount=%d\n", __func__,min_refs_line->id, atomic_read(((atomic_t *)(&min_refs_line->ref.refcount.refs))));
+
+		while(list_empty(&l_mg->free_list)){
+			;
+			pr_info("%s(): unlocked locks.... waiting for line %d to be freed\n", __func__, min_refs_line->id);
+		}
+		pr_info("%s():acquire both locks again\n",__func__);
+		spin_lock(&l_mg->free_lock);
+	//	spin_lock(&min_refs_line->lock);
 	}
 
-	line = list_first_entry(&l_mg->free_list, struct pblk_line, list);
+	//line = list_first_entry(&l_mg->free_list, struct pblk_line, list);
+//	if (line == NULL) {
+//		goto retry;
+//	}
+	line = min_refs_line;
 	list_del(&line->list);
 	l_mg->nr_free_lines--;
 
 	bit = find_first_zero_bit(line->blk_bitmap, lm->blk_per_line);
+	pr_info("%s():found bit %d\n",__func__,bit);
 	if (unlikely(bit >= lm->blk_per_line)) {
 		spin_lock(&line->lock);
 		line->state = PBLK_LINESTATE_BAD;
@@ -1865,6 +1903,7 @@ static void __pblk_line_put(struct pblk *pblk, struct pblk_line *line)
 	struct pblk_line_mgmt *l_mg = &pblk->l_mg;
 	struct pblk_gc *gc = &pblk->gc;
 
+	pr_info("%s(): put line %d\n",__func__, line->id);
 	spin_lock(&line->lock);
 	WARN_ON(line->state != PBLK_LINESTATE_GC);
 	line->state = PBLK_LINESTATE_FREE;
@@ -1906,6 +1945,7 @@ void pblk_line_put(struct kref *ref)
 	struct pblk_line *line = container_of(ref, struct pblk_line, ref);
 	struct pblk *pblk = line->pblk;
 
+	pr_info("%s():\n",__func__);
 	__pblk_line_put(pblk, line);
 }
 
@@ -2036,7 +2076,8 @@ void pblk_line_close(struct pblk *pblk, struct pblk_line *line)
 	spin_lock(&l_mg->gc_lock);
 	spin_lock(&line->lock);
 	WARN_ON(line->state != PBLK_LINESTATE_OPEN);
-	pr_info("%s():LINESTATE:changing line %d state from %d to CLOSED\n", __func__, line-> id, line-> state);
+	pr_info("%s():LINESTATE:changing line %d state from %d to CLOSED\n", __func__, line->id, line->state);
+	pr_info("%s():line=%d refcount=%d\n",__func__,line->id, atomic_read(((atomic_t *)(&line->ref.refcount.refs))));
 	line->state = PBLK_LINESTATE_CLOSED;
 	move_list = pblk_line_gc_list(pblk, line);
 	list_add_tail(&line->list, move_list);

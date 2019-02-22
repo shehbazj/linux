@@ -357,7 +357,6 @@ static int pblk_setup_w_rq(struct pblk *pblk, struct nvm_rq *rqd,
 		// device physical address takes place here....
 		ret = pblk_map_rq(pblk, rqd, c_ctx->sentry, lun_bitmap,
 							valid, 0);
-		pr_info("%s():returned from pblk_map_rq ret=%d\n",__func__, ret);
 	} else {
 		// if erase line is not erased yet, erase current blocks
 		pr_info("%s(): e_line->left_eblks = %d\n", __func__, atomic_read(&e_line->left_eblks));
