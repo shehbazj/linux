@@ -1153,7 +1153,8 @@ retry_meta:
 		spin_lock(&l_mg->free_lock);
 		goto retry_meta;
 	}
-
+	
+	pr_info("%s():setting meta_line %d\n", __func__, meta_line);
 	set_bit(meta_line, &l_mg->meta_bitmap);
 	line->meta_line = meta_line;
 
@@ -2064,7 +2065,7 @@ void pblk_line_close(struct pblk *pblk, struct pblk_line *line)
 	int min_write_pgs = 8;
 	// XXX change to min_write_pages
 
-//#ifdef CONFIG_NVM_PBLK_DEBUG
+#ifdef CONFIG_NVM_PBLK_DEBUG
 //	int next = 0;
 //	while(!bitmap_full(line->map_bitmap, lm->sec_per_line)) {
 //		next = find_next_zero_bit(line->map_bitmap,lm->sec_per_line, next);
@@ -2073,10 +2074,11 @@ void pblk_line_close(struct pblk *pblk, struct pblk_line *line)
 //	for (i = 0; i < num_luns ; i++) {
 //		line->cur_secs[i] = lm->sec_per_line - (num_luns - i + 1) * min_write_pgs;
 //	}
-//	WARN_ON(!bitmap_full(line->map_bitmap, lm->sec_per_line));
-//#endif
+	WARN_ON(!bitmap_full(line->map_bitmap, lm->sec_per_line));
+#endif
 
 	spin_lock(&l_mg->free_lock);
+	pr_info("%s():clearing meta_line=%d\n",__func__, line->meta_line);
 	WARN_ON(!test_and_clear_bit(line->meta_line, &l_mg->meta_bitmap));
 	spin_unlock(&l_mg->free_lock);
 
