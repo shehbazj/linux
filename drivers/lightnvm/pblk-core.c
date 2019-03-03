@@ -1145,7 +1145,7 @@ static void pblk_line_setup_metadata(struct pblk_line *line,
 	lockdep_assert_held(&l_mg->free_lock);
 
 retry_meta:
-	pr_info("%s():line = %d meta bitmap\n",__func__, line->id);
+//	pr_info("%s():line = %d meta bitmap\n",__func__, line->id);
 	meta_line = find_first_zero_bit(&l_mg->meta_bitmap, PBLK_DATA_LINES);
 	if (meta_line == PBLK_DATA_LINES) {
 		spin_unlock(&l_mg->free_lock);
@@ -1437,6 +1437,7 @@ int pblk_line_recov_alloc(struct pblk *pblk, struct pblk_line *line)
 	int ret;
 
 	spin_lock(&l_mg->free_lock);
+	pr_info("%s():adding line to data_line\n", __func__);
 	l_mg->data_line = line;
 	list_del(&line->list);
 
@@ -1515,7 +1516,7 @@ struct pblk_line *pblk_line_get(struct pblk *pblk)
 
 retry:
 	if (list_empty(&l_mg->free_list)) {
-		pblk_err(pblk, "no free lines\n");
+		pblk_err(pblk, "no free lines %d\n", l_mg->nr_free_lines);
 		return NULL;
 //		pr_info("force free pending lines\n");
 //		min_refs_line = &pblk->lines[0];
@@ -1551,9 +1552,11 @@ retry:
 	}
 
 	line = list_first_entry(&l_mg->free_list, struct pblk_line, list);
-//	if (line == NULL) {
-//		goto retry;
-//	}
+	if (line == NULL) {
+		pr_info("%s():no entry in free_list, retry\n",__func__);
+		goto retry;
+	}
+	pr_info("%s():first entry in free_list=%d decrease nr_free_lines %d\n",__func__, line->id, l_mg->nr_free_lines);
 	//line = min_refs_line;
 	list_del(&line->list);
 	l_mg->nr_free_lines--;
@@ -1586,7 +1589,7 @@ retry:
 			goto retry;
 		default:
 			pblk_err(pblk, "failed to prepare line %d\n", line->id);
-			pr_info("%s():adding line %d to free_list\n",__func__, line->id);
+			pr_info("%s():default :: adding line %d to free_list nr_free_lines=%d\n",__func__, line->id, l_mg->nr_free_lines);
 			list_add(&line->list, &l_mg->free_list);
 			l_mg->nr_free_lines++;
 			return NULL;
@@ -1607,6 +1610,7 @@ retry:
 	spin_lock(&l_mg->free_lock);
 	retry_line = pblk_line_get(pblk);
 	if (!retry_line) {
+		pr_info("%s():did not get retry line l_mg->data_line set to null\n",__func__);
 		l_mg->data_line = NULL;
 		spin_unlock(&l_mg->free_lock);
 		return NULL;
@@ -1619,7 +1623,7 @@ retry:
 	retry_line->meta_line = line->meta_line;
 
 	pblk_line_reinit(line);
-
+	pr_info("%s():adding line %d to l_mg->data_line\n",__func__, retry_line->id);
 	l_mg->data_line = retry_line;
 	spin_unlock(&l_mg->free_lock);
 
@@ -1652,6 +1656,7 @@ struct pblk_line *pblk_line_get_first_data(struct pblk *pblk)
 
 	line->seq_nr = l_mg->d_seq_nr++;
 	line->type = PBLK_LINETYPE_DATA;
+	pr_info("%s():adding line %d to l_mg->data_line\n",__func__, line->id);
 	l_mg->data_line = line;
 
 	pblk_line_setup_metadata(line, l_mg, &pblk->lm);
@@ -1740,6 +1745,7 @@ static void pblk_line_close_meta_sync(struct pblk *pblk)
 
 	spin_lock(&l_mg->close_lock);
 	if (list_empty(&l_mg->emeta_list)) {
+		pr_info("%s():emeta list is empty, not closing any lines\n", __func__);
 		spin_unlock(&l_mg->close_lock);
 		return;
 	}
@@ -1801,6 +1807,7 @@ void __pblk_pipeline_stop(struct pblk *pblk)
 	spin_lock(&l_mg->free_lock);
 	pblk->state = PBLK_STATE_STOPPED;
 	trace_pblk_state(pblk_disk_name(pblk), pblk->state);
+	pr_info("%s():pipeline stop l_mg->data_line set to null\n",__func__);
 	l_mg->data_line = NULL;
 	l_mg->data_next = NULL;
 	spin_unlock(&l_mg->free_lock);
@@ -1821,17 +1828,12 @@ struct pblk_line *pblk_line_replace_data(struct pblk *pblk)
 	new = l_mg->data_next;
 	if (!new) {
 		pr_info("%s():no new line return\n",__func__);
-		l_mg->data_next = pblk_line_get(pblk);
-		if(!l_mg->data_next) {
-			pr_info("%s():line get returned null\n",__func__);
-			goto out;
-		}
-		new = l_mg->data_next;
-		pr_info("%s(): assigned new line %d\n", __func__, new->id);
+		goto out;
 	}
 
 	spin_lock(&l_mg->free_lock);
 	cur = l_mg->data_line;
+	pr_info("%s():adding line %d to l_mg->data_line\n",__func__, new->id);
 	l_mg->data_line = new;
 
 	pblk_line_setup_metadata(new, l_mg, &pblk->lm);
@@ -1882,8 +1884,10 @@ retry_setup:
 
 	/* Allocate next line for preparation */
 	spin_lock(&l_mg->free_lock);
+	pr_info("%s():calling pblk_line_get()\n",__func__);
 	l_mg->data_next = pblk_line_get(pblk);
 	if (!l_mg->data_next) {
+		pr_info("%s():did not get l_mg->data_next after current line %d\n",__func__,l_mg->data_line->id);
 		/* If we cannot get a new line, we need to stop the pipeline.
 		 * Only allow as many writes in as we can store safely and then
 		 * fail gracefully
@@ -1923,9 +1927,9 @@ static void __pblk_line_put(struct pblk *pblk, struct pblk_line *line)
 	atomic_dec(&gc->pipeline_gc);
 
 	spin_lock(&l_mg->free_lock);
-	pr_info("%s():placed line %d in free_list\n", __func__, line->id);
 	list_add_tail(&line->list, &l_mg->free_list);
 	l_mg->nr_free_lines++;
+	pr_info("%s():placed line %d in free_list nr_free_lines =%d\n", __func__, line->id, l_mg->nr_free_lines);
 	spin_unlock(&l_mg->free_lock);
 
 	pblk_rl_free_lines_inc(&pblk->rl, line);
@@ -2039,10 +2043,11 @@ int pblk_line_is_full(struct pblk_line *line, struct pblk *pblk)
 static void pblk_line_should_sync_meta(struct pblk *pblk)
 {
 	if (pblk_rl_is_limit(&pblk->rl)) {
+		pr_info("%s():calling pblk_line_close_meta_sync\n",__func__);
 		pblk_line_close_meta_sync(pblk);
 	} else {
-		pr_info("did not close meta sync, forceful closure\n");
-		pblk_line_close_meta_sync(pblk);
+		pr_info("%s():did not close meta sync, forceful closure\n",__func__);
+	//	pblk_line_close_meta_sync(pblk);
 	}
 }
 
@@ -2182,8 +2187,10 @@ void pblk_line_close_ws(struct work_struct *work)
 	/* Write errors makes the emeta start address stored in smeta invalid,
 	 * so keep a copy of the lba list until we've gc'd the line
 	 */
-	if (w_err_gc->has_write_err)
+	if (w_err_gc->has_write_err) {
+		pr_info("%s():write had error\n", __func__);
 		pblk_save_lba_list(pblk, line);
+	}
 
 	pblk_line_close(pblk, line);
 	mempool_free(line_ws, &pblk->gen_ws_pool);
@@ -2390,6 +2397,8 @@ void pblk_update_map_dev(struct pblk *pblk, sector_t lba,
 out:
 	spin_unlock(&pblk->trans_lock);
 }
+
+// add ref for each lba that is not empty and not in cache.
 
 void pblk_lookup_l2p_seq(struct pblk *pblk, struct ppa_addr *ppas,
 			 sector_t blba, int nr_secs)
