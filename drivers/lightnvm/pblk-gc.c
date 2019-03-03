@@ -33,10 +33,11 @@ static int pblk_gc_write(struct pblk *pblk)
 	struct pblk_gc *gc = &pblk->gc;
 	struct pblk_gc_rq *gc_rq, *tgc_rq;
 	LIST_HEAD(w_list);
-	pr_info("%s():begin\n",__func__);
+//	pr_info("%s():begin\n",__func__);
 	spin_lock(&gc->w_lock);
 	if (list_empty(&gc->w_list)) {
 		spin_unlock(&gc->w_lock);
+		pr_info("%s(): gc->w_list is empty\n",__func__);
 		return 1;
 	}
 
@@ -48,9 +49,11 @@ static int pblk_gc_write(struct pblk *pblk)
 		pblk_write_gc_to_cache(pblk, gc_rq);
 		list_del(&gc_rq->list);
 		kref_put(&gc_rq->line->ref, pblk_line_put);
+		pr_info("%s():ref count after doing gc_writes for line %d= %d\n",__func__, gc_rq->line->id, atomic_read(((atomic_t *)(&gc_rq->line->ref.refcount.refs))));
 		pblk_gc_free_gc_rq(gc_rq);
 	}
 
+	pr_info("%s(): no more entry in list, return\n", __func__);
 	return 0;
 }
 
@@ -198,7 +201,7 @@ static void pblk_gc_line_prepare_ws(struct work_struct *work)
 	unsigned long *invalid_bitmap;
 	int sec_left, nr_secs, bit;
 
-	pr_info("%s():begin for line = %d\n", __func__, line->id);
+	pr_info("%s():begin for line=%d ref_count=%d\n", __func__, line->id,atomic_read(((atomic_t *)(&line->ref.refcount.refs))));
 	invalid_bitmap = kmalloc(lm->sec_bitmap_len, GFP_KERNEL);
 	if (!invalid_bitmap)
 		goto fail_free_ws;
@@ -219,6 +222,7 @@ static void pblk_gc_line_prepare_ws(struct work_struct *work)
 	bitmap_copy(invalid_bitmap, line->invalid_bitmap, lm->sec_per_line);
 	// sec_left = number of valid sector count in the line.
 	sec_left = pblk_line_vsc(line);
+	pr_info("%s():valid sector count for line %d = %d invalid bitmap weight=%d\n",__func__,line->id,sec_left, bitmap_weight(line->invalid_bitmap, lm->sec_per_line));
 	spin_unlock(&line->lock);
 
 	if (sec_left < 0) {
@@ -230,7 +234,9 @@ static void pblk_gc_line_prepare_ws(struct work_struct *work)
 
 	// populate invalid bitmap done.
 
-	pr_info("%s():line=%d vsc=%d invalid bitmap weight=%d\n",__func__, line->id, sec_left, __bitmap_weight(invalid_bitmap,lm->sec_per_line));
+	//pr_info("%s():line=%d vsc=%d invalid bitmap weight=%d\n",__func__, line->id, sec_left, __bitmap_weight(invalid_bitmap,lm->sec_per_line));
+	pr_info("%s():ref count before gc for line %d= %d\n",__func__, line->id, atomic_read(((atomic_t *)(&line->ref.refcount.refs))));
+
 next_rq:
 	// continue reading and creating gc_rq's with 32 sectors
 	// of valid blocks that need to be saved before GC'ing the sector
@@ -297,6 +303,8 @@ out:
 
 	kref_put(&line->ref, pblk_line_put);
 	atomic_dec(&gc->read_inflight_gc);
+
+	pr_info("%s():ref count after creating gc for line %d= %d\n",__func__, line->id, atomic_read(((atomic_t *)(&line->ref.refcount.refs))));
 
 	pr_info("%s():end GC. line=%d\n",__func__,line->id);
 	return;
@@ -441,6 +449,7 @@ void pblk_gc_free_full_lines(struct pblk *pblk)
 
 		atomic_inc(&gc->pipeline_gc);
 		kref_put(&line->ref, pblk_line_put);
+		pr_info("%s():num references after kref_put in line %d = %d\n",__func__, line->id, atomic_read(((atomic_t *)(&line->ref.refcount.refs))));
 	} while (1);
 }
 
@@ -484,7 +493,7 @@ next_gc_group:
 
 		spin_lock(&line->lock);
 		WARN_ON(line->state != PBLK_LINESTATE_CLOSED);
-		pr_info("%s():LINESTATE: line id %d state = %d change to _GC\n",__func__, line->id, line->state);
+		pr_info("%s():num references after get on victim line %d = %d\n",__func__, line->id, atomic_read(((atomic_t *)(&line->ref.refcount.refs))));
 		line->state = PBLK_LINESTATE_GC;
 		trace_pblk_line_state(pblk_disk_name(pblk), line->id,
 					line->state);
