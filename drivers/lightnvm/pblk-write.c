@@ -289,7 +289,7 @@ static void pblk_end_io_write_meta(struct nvm_rq *rqd)
 	}
 
 	sync = atomic_add_return(rqd->nr_ppas, &emeta->sync);
-	pr_info("%s():sync = %d rqd->nr_ppas = %d emeta->sync = %d\n", __func__, sync, rqd->nr_ppas, atomic_read(&emeta->sync));
+//	pr_info("%s():sync = %d rqd->nr_ppas = %d emeta->sync = %d\n", __func__, sync, rqd->nr_ppas, atomic_read(&emeta->sync));
 	if (sync == emeta->nr_entries) {
 		pblk_gen_run_ws(pblk, line, NULL, pblk_line_close_ws,
 						GFP_ATOMIC, pblk->close_wq);
@@ -418,9 +418,9 @@ int pblk_submit_meta_io(struct pblk *pblk, struct pblk_line *meta_line)
 
 	rq_len = rq_ppas * geo->csecs;	// rq_ppas = 8, csecs = chunk sectors = 4096 rq_len = 32768
 
-	pr_info("%s():rq_ppas = %d, geo->csecs = %d, rq_len = %d\n",__func__,rq_ppas, geo->csecs, rq_len);
+//	pr_info("%s():rq_ppas = %d, geo->csecs = %d, rq_len = %d\n",__func__,rq_ppas, geo->csecs, rq_len);
 
-	pr_info("%s():emeta->mem=%d\n",__func__, emeta->mem);
+//	pr_info("%s():emeta->mem=%d\n",__func__, emeta->mem);
 	data = ((void *)emeta->buf) + emeta->mem;
 
 	bio = pblk_bio_map_addr(pblk, data, rq_ppas, rq_len,
@@ -440,7 +440,7 @@ int pblk_submit_meta_io(struct pblk *pblk, struct pblk_line *meta_line)
 
 	ppa_list = nvm_rq_to_ppa_list(rqd);
 
-	pr_info("%s():rqd->nr_ppas %d, rq_ppas %d\n",__func__, rqd->nr_ppas, rq_ppas);
+//	pr_info("%s():rqd->nr_ppas %d, rq_ppas %d\n",__func__, rqd->nr_ppas, rq_ppas);
 	// rqd->nr_ppas = 8, rq_ppas = 8
 	// for now, allocate all rqd->nr_ppas from the first PU.
 	// XXX allocation scheme is hardcoded for now, this allocation scheme 
@@ -453,11 +453,6 @@ int pblk_submit_meta_io(struct pblk *pblk, struct pblk_line *meta_line)
 		pr_info("%s():line->cur_sec = %d\n", __func__,meta_line->cur_sec);
 	}
 
-	pr_info("%s():line=%d meta_line->cur_sec=%d\n",__func__,meta_line->id, meta_line->cur_sec);
-	if(meta_line->cur_sec < 16344) {
-		pr_info("%s():readjusting meta_line=%d cur_sec=%d to 16344\n",__func__, meta_line->id, meta_line->cur_sec);
-		meta_line->cur_sec = 16344;
-	}
 	for (i = 0; i < rqd->nr_ppas; ) {
 		spin_lock(&meta_line->lock);
 		paddr = __pblk_alloc_page(pblk, meta_line, rq_ppas);
