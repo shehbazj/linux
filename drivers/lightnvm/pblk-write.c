@@ -463,8 +463,13 @@ int pblk_submit_meta_io(struct pblk *pblk, struct pblk_line *meta_line)
 
 	spin_lock(&l_mg->close_lock);
 	emeta->mem += rq_len;
-	if (emeta->mem >= lm->emeta_len[0])
+	pr_info("%s():rq_len=%d\n",__func__, rq_len);
+	if (emeta->mem >= lm->emeta_len[0]) {
+		pr_info("%s():delete line %d\n", __func__, meta_line);
 		list_del(&meta_line->list);
+	}else {
+		pr_info("%s():did not delete meta_line %d emeta->mem=%d\n",__func__, meta_line->id, emeta->mem);
+	}
 	spin_unlock(&l_mg->close_lock);
 
 	pblk_down_chunk(pblk, ppa_list[0]);
@@ -546,19 +551,23 @@ static struct pblk_line *pblk_should_submit_meta_io(struct pblk *pblk,
 
 	spin_lock(&l_mg->close_lock);
 	if (list_empty(&l_mg->emeta_list)) {
+		pr_info("%s():l_mg->emeta_list is empty\n",__func__);
 		spin_unlock(&l_mg->close_lock);
 		return NULL;
 	}
 	meta_line = list_first_entry(&l_mg->emeta_list, struct pblk_line, list);
 	if (meta_line->emeta->mem >= lm->emeta_len[0]) {
+		pr_info("%s():line = %d line->emeta->mem %d >= lm->emeta_len[0] %d\n",__func__, meta_line->id, meta_line->emeta->mem, lm->emeta_len[0]);
 		spin_unlock(&l_mg->close_lock);
 		return NULL;
 	}
 	spin_unlock(&l_mg->close_lock);
 
 	if (!pblk_valid_meta_ppa(pblk, meta_line, data_rqd)) {
+		pr_info("%s():line = %d not a valid ppa line->emeta->mem=%d, returning null\n",__func__, meta_line->id,  meta_line->emeta->mem);
 		return NULL;
 	}
+	pr_info("%s():meta_line=%d emeta->mem=%d\n",__func__, meta_line->id, meta_line->emeta->mem);
 	return meta_line;
 }
 

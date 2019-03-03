@@ -37,7 +37,6 @@ static int pblk_gc_write(struct pblk *pblk)
 	spin_lock(&gc->w_lock);
 	if (list_empty(&gc->w_list)) {
 		spin_unlock(&gc->w_lock);
-		pr_info("%s(): gc->w_list is empty\n",__func__);
 		return 1;
 	}
 

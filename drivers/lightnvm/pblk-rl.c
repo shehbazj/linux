@@ -30,11 +30,9 @@ int pblk_rl_is_limit(struct pblk_rl *rl)
 
 	rb_space = atomic_read(&rl->rb_space);
 
-	if(rb_space != 0) {
-		pr_info("%s():rb_space = %d\n",__func__, rb_space);
-	} else {
+	if(rb_space == 0)
 		pr_info("%s(): rb_space is zero\n",__func__);
-	}
+
 	return (rb_space == 0);
 }
 
@@ -56,12 +54,8 @@ void pblk_rl_inserted(struct pblk_rl *rl, int nr_entries)
 {
 	int rb_space = atomic_read(&rl->rb_space);
 
-	if (unlikely(rb_space >= 0)) {
-		pr_info("%s():rb_space is positive = %d so decrement\n",__func__, rb_space);
+	if (unlikely(rb_space >= 0))
 		atomic_sub(nr_entries, &rl->rb_space);
-	}else {
-		pr_info("%s():rb_space is negative = %d\n",__func__, rb_space);
-	}
 }
 
 int pblk_rl_gc_may_insert(struct pblk_rl *rl, int nr_entries)
