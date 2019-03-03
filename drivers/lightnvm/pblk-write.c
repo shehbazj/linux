@@ -465,7 +465,7 @@ int pblk_submit_meta_io(struct pblk *pblk, struct pblk_line *meta_line)
 	emeta->mem += rq_len;
 	pr_info("%s():rq_len=%d\n",__func__, rq_len);
 	if (emeta->mem >= lm->emeta_len[0]) {
-		pr_info("%s():delete line %d\n", __func__, meta_line);
+		pr_info("%s():delete line %d\n", __func__, meta_line->id);
 		list_del(&meta_line->list);
 	}else {
 		pr_info("%s():did not delete meta_line %d emeta->mem=%d\n",__func__, meta_line->id, emeta->mem);
