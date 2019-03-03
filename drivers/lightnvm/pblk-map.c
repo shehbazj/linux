@@ -22,8 +22,35 @@
 static void get_secs_reqd_per_lun(__le64 *lba_list, int *nr_secs_per_lun)
 {
 	int i;
-	for (i = 0; i < 20 ;  i++){
+	for (i = 0; i < 20 ;  i++) {
 		nr_secs_per_lun[i] = 2;
+	}
+}
+
+void pblk_line_close_holes(struct pblk *pblk, struct pblk_line *line)
+{
+	// find minimum curr_sec.
+	// invalidate all unset secs.
+	
+	u64 paddr = 16385;
+	int i;
+
+	// find minimum cur_secs
+	for(i = 0 ; i < 4; i++) {
+		if (paddr > line->cur_secs[i]) {
+			paddr = line->cur_secs[i];
+		}
+	}
+
+	if(paddr == 16385) {
+		pr_info("%s():no holes to fill\n", __func__);
+	}else {
+		pr_info("%s():start filling holes in line %d paddr %llu\n",__func__,line->id, paddr);
+	}
+	// XXX hardcoded, remove this...
+	while (paddr < 16344) {
+		test_and_set_bit(paddr, line->map_bitmap);
+		__pblk_map_invalidate(pblk, line, paddr++);
 	}
 }
 
@@ -67,12 +94,16 @@ static int pblk_map_page_data(struct pblk *pblk, unsigned int sentry,
 		 */
 		pr_info("%s():calling line replace data\n",__func__);
 		line = pblk_line_replace_data(pblk);
+		pblk_line_close_holes(pblk, prev_line);
 		pr_info("%s():calling line close meta\n",__func__);
 		pblk_line_close_meta(pblk, prev_line);
 		//pblk_line_close(pblk, prev_line);
 
 		if (!line) {
 			pr_info("%s():%d no line return\n",__func__, __LINE__);
+			for(i=0; i < 16;i++) {
+				pr_info("%s():line %d refcount=%d\n",__func__, i, atomic_read(((atomic_t *)(&pblk->lines[i].ref.refcount.refs))));
+			}
 			pblk_pipeline_stop(pblk);
 			return -ENOSPC;
 		}

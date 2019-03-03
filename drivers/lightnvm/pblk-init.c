@@ -147,6 +147,7 @@ static int pblk_l2p_recover(struct pblk *pblk, bool factory_init)
 	pblk_gc_free_full_lines(pblk);
 
 	if (!line) {
+		pr_info("%s():calling pblk_line_get_first_data\n",__func__);
 		/* Configure next line for user data */
 		line = pblk_line_get_first_data(pblk);
 		if (!line)
@@ -793,6 +794,7 @@ static long pblk_setup_line_meta(struct pblk *pblk, struct pblk_line *line,
 
 	atomic_set(&line->blk_in_line, chk_in_line);
 	list_add_tail(&line->list, &l_mg->free_list);
+	pr_info("%s():increment nr_free_lines = %d\n",__func__, l_mg->nr_free_lines);
 	l_mg->nr_free_lines++;
 
 	return chk_in_line;
