@@ -677,6 +677,108 @@ u64 __pblk_alloc_page(struct pblk *pblk, struct pblk_line *line, int nr_secs)
 	return addr;
 }
 
+/* wrapper for retriving next addr from the same lun */
+
+void find_next_zero_bit_same_lun(const unsigned long*addr, int total_size, int curr_offset, int total_luns, int num_req_sectors, u64*paddr_list, int nr_secs, int curr_lun, struct pblk_line *line)
+{
+       int i;
+       int stripe_length = total_luns * nr_secs; // 32
+       int curr_offset_base;
+       int rem;
+       for ( i = 0 ; i < num_req_sectors ; i++) {
+               curr_offset = find_next_zero_bit(addr, total_size, line->cur_secs[curr_lun]);
+               if ( (curr_offset % (total_luns * nr_secs) <  (nr_secs * (curr_lun + 1)))
+                       && (curr_offset % (total_luns * nr_secs) >= (nr_secs * (curr_lun))) )
+               {
+                       paddr_list[i] = curr_offset;
+                       line->cur_secs[curr_lun] = curr_offset;
+                       WARN_ON(test_and_set_bit(line->cur_secs[curr_lun]++, line->map_bitmap));
+               }else {
+                       curr_offset_base = ((div_u64_rem(curr_offset, stripe_length, &rem)) * stripe_length)
+                                               + (curr_lun * nr_secs);
+                       curr_offset = (curr_offset_base > curr_offset) ? curr_offset_base : curr_offset_base + (stripe_length);
+                       paddr_list[i] = curr_offset;
+                       line->cur_secs[curr_lun] = curr_offset;
+                       WARN_ON(test_and_set_bit(line->cur_secs[curr_lun]++, line->map_bitmap));
+               }
+       }
+}
+
+void __pblk_alloc_page_data(struct pblk *pblk, struct pblk_line *line, int *nr_secs_per_lun, u64* paddr_list, int nr_secs)
+{
+       int lun;
+
+       struct nvm_tgt_dev *dev = pblk->dev;
+        struct nvm_geo *geo = &dev->geo;
+       int total_luns = geo->all_luns;
+       int nr_secs_curr_lun;
+       // keep incrementing sentry by nr_secs_curr_lun each time n number of luns are assigned to it
+       int sentry = 0;
+
+       BUG_ON(total_luns == 0);
+
+       lockdep_assert_held(&line->lock);
+
+       // check if cur_secs for lun + nr_secs does not exceed total sectors
+       // allocated to the lun
+       for (lun = 0 ; lun < total_luns ; lun++) {
+               if ( line->cur_secs[lun] + nr_secs_per_lun[lun] > pblk->lm.sec_per_line)
+               {
+                       WARN(1, "pblk: page allocation out of bounds cur secs = %d lun = %d nr_secs_per_lun %d\n", line->cur_secs[lun], lun, nr_secs_per_lun[lun]);
+                       nr_secs_per_lun[lun] = pblk->lm.sec_per_line - line->cur_secs[lun];
+               }
+               
+               // addr is the next 0 sector in line->map_bitmap. instead, skip and
+               // find the pa that corresponds to the PU in which current lba is to be mapped.
+               nr_secs_curr_lun = nr_secs_per_lun[lun];
+               // update line->map_bitmap in find_next_zero_bit itself
+               find_next_zero_bit_same_lun(line->map_bitmap,
+                               pblk->lm.sec_per_line, line->cur_secs[lun],
+                               total_luns, nr_secs_curr_lun, paddr_list + sentry, nr_secs, lun, line);
+               sentry += nr_secs_curr_lun;
+       }
+}
+
+
+void __pblk_alloc_page_mdata(struct pblk *pblk, struct pblk_line *line, int *nr_secs_per_lun, u64* paddr_list, int nr_secs)
+{
+       int lun;
+
+       struct nvm_tgt_dev *dev = pblk->dev;
+        struct nvm_geo *geo = &dev->geo;
+       int total_luns = geo->all_luns;
+       int nr_secs_curr_lun;
+       // keep incrementing sentry by nr_secs_curr_lun each time n number of luns are assigned to it
+       int sentry = 0;
+
+       BUG_ON(total_luns == 0);
+
+       lockdep_assert_held(&line->lock);
+
+       // check if cur_secs for lun + nr_secs does not exceed total sectors
+       // allocated to the lun
+       for (lun = 0 ; lun < total_luns ; lun++) {
+               if ( line->cur_secs[lun] + nr_secs_per_lun[lun] > pblk->lm.sec_per_line)
+               {
+                       WARN(1, "pblk: page allocation out of bounds cur secs = %d lun = %d nr_secs_per_lun %d pblk->lm.sec_per_line_per_lun %d\n", line->cur_secs[lun], lun, nr_secs_per_lun[lun], pblk->lm.sec_per_line_per_lun);
+                       nr_secs_per_lun[lun] = pblk->lm.sec_per_line - line->cur_secs[lun];
+               }
+               
+               // addr is the next 0 sector in line->map_bitmap. instead, skip and
+               // find the pa that corresponds to the PU in which current lba is to be mapped.
+               nr_secs_curr_lun = nr_secs_per_lun[lun];
+               // update line->map_bitmap in find_next_zero_bit itself
+               find_next_zero_bit_same_lun(line->map_bitmap,
+                               pblk->lm.sec_per_line, line->cur_secs[lun],
+                               total_luns, nr_secs_curr_lun, paddr_list + sentry, nr_secs, lun, line);
+               sentry += nr_secs_curr_lun;
+       }
+}
+
+
+
+
+
 u64 pblk_alloc_page(struct pblk *pblk, struct pblk_line *line, int nr_secs)
 {
 	u64 addr;
@@ -693,13 +795,31 @@ u64 pblk_alloc_page(struct pblk *pblk, struct pblk_line *line, int nr_secs)
 	return addr;
 }
 
+// nr_secs_per_lun = list of number of sectors required per lun
+// paddr_list = empty list in which paddr for entire lun needs to be filled.
+// size of paddr_list = nr_secs = minimum write pages.
+// size of nr_secs_per_lun = number of luns.
+void pblk_alloc_page_data(struct pblk *pblk, struct pblk_line *line, int *nr_secs_per_lun, u64 *paddr_list, int nr_secs)
+{
+       /* Lock needed in case a write fails and a recovery needs to remap
+        * failed write buffer entries
+        */
+       spin_lock(&line->lock);
+       __pblk_alloc_page_data(pblk, line, nr_secs_per_lun, paddr_list, nr_secs);
+       line->left_msecs -= nr_secs;
+       WARN(line->left_msecs < 0, "pblk: page allocation out of bounds\n");
+       spin_unlock(&line->lock);
+}
+
+
 u64 pblk_lookup_page(struct pblk *pblk, struct pblk_line *line)
 {
 	u64 paddr;
 
 	spin_lock(&line->lock);
 	paddr = find_next_zero_bit(line->map_bitmap,
-					pblk->lm.sec_per_line, line->cur_sec);
+					pblk->lm.sec_per_line, line->cur_secs[3]);
+//					pblk->lm.sec_per_line, line->cur_sec);
 	spin_unlock(&line->lock);
 
 	return paddr;
@@ -1799,9 +1919,32 @@ struct pblk_line *pblk_line_get_erase(struct pblk *pblk)
 	return pblk->l_mg.data_next;
 }
 
-int pblk_line_is_full(struct pblk_line *line)
+int pblk_line_is_full(struct pblk_line *line, struct pblk *pblk)
 {
-	return (line->left_msecs == 0);
+//	return (line->left_msecs == 0);
+        int i;
+        struct nvm_tgt_dev *dev = pblk->dev;
+        struct nvm_geo *geo = &dev->geo;
+        int total_luns = geo->all_luns;
+        
+        if (line->left_msecs == 0) {
+                pr_info("%s():line %d full: left_msecs == 0\n", __func__, line->id);
+                return 1;
+        }
+ 
+        // check if any cur_secs are about to reach the end of the line
+	// we check this using a margin of num PUs (4) * sector_size (8).
+ 
+        for (i = 0; i < total_luns ; i++) {
+                if(line->cur_secs[i] + 8 >= pblk->lm.sec_per_line) {
+                        pr_info("%s():line %d full: cur_secs=%d %d %d %d\n", __func__, line->id, line->cur_secs[0],line->cur_secs[1], line->cur_secs[2], line->cur_secs[3]);
+                        return 1;
+                }
+        }
+        
+ //     pr_info("%s():line not full cur_secs= %d %d %d %d\n", __func__, line->cur_secs[0], line->cur_secs[1], line->cur_secs[2], line->cur_secs[3]);
+        return 0;
+
 }
 
 static void pblk_line_should_sync_meta(struct pblk *pblk)
@@ -1819,6 +1962,7 @@ void pblk_line_close(struct pblk *pblk, struct pblk_line *line)
 	struct list_head *move_list;
 	int i;
 
+	pr_info("%s():%d\n",__func__, line->id);
 #ifdef CONFIG_NVM_PBLK_DEBUG
 	WARN(!bitmap_full(line->map_bitmap, lm->sec_per_line),
 				"pblk: corrupt closed line %d\n", line->id);
@@ -1892,8 +2036,8 @@ void pblk_line_close_meta(struct pblk *pblk, struct pblk_line *line)
 	/* Update the in-memory start address for emeta, in case it has
 	 * shifted due to write errors
 	 */
-	if (line->emeta_ssec != line->cur_sec)
-		line->emeta_ssec = line->cur_sec;
+//	if (line->emeta_ssec != line->cur_sec)
+//		line->emeta_ssec = line->cur_sec;
 
 	list_add_tail(&line->list, &l_mg->emeta_list);
 	spin_unlock(&line->lock);

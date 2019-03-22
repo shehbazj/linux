@@ -588,6 +588,7 @@ static void pblk_lines_free(struct pblk *pblk)
 	for (i = 0; i < l_mg->nr_lines; i++) {
 		line = &pblk->lines[i];
 
+		kfree(line->cur_secs);
 		pblk_line_free(line);
 		pblk_line_meta_free(l_mg, line);
 	}
@@ -974,6 +975,7 @@ static int pblk_line_meta_init(struct pblk *pblk)
 	int i;
 
 	lm->sec_per_line = geo->clba * geo->all_luns;
+	lm->sec_per_line_per_lun = geo->clba;
 	lm->blk_per_line = geo->all_luns;
 	lm->blk_bitmap_len = BITS_TO_LONGS(geo->all_luns) * sizeof(long);
 	lm->sec_bitmap_len = BITS_TO_LONGS(lm->sec_per_line) * sizeof(long);
@@ -1032,7 +1034,10 @@ static int pblk_lines_init(struct pblk *pblk)
 	struct pblk_line *line;
 	void *chunk_meta;
 	int nr_free_chks = 0;
-	int i, ret;
+	int i,j,ret;
+
+       struct nvm_tgt_dev *dev = pblk->dev;
+       struct nvm_geo *geo = &dev->geo;
 
 	ret = pblk_line_meta_init(pblk);
 	if (ret)
@@ -1061,6 +1066,12 @@ static int pblk_lines_init(struct pblk *pblk)
 
 	for (i = 0; i < l_mg->nr_lines; i++) {
 		line = &pblk->lines[i];
+
+               line->cur_secs = kcalloc(geo->all_luns, sizeof(unsigned int), GFP_KERNEL);
+               // initialize cur_secs to appropriate positions on the stripe
+               for(j = 0 ; j < geo->all_luns ; j++) {
+                       line->cur_secs[j] = j * pblk->min_write_pgs;
+               }
 
 		ret = pblk_alloc_line_meta(pblk, line);
 		if (ret)
@@ -1158,6 +1169,25 @@ static void pblk_tear_down(struct pblk *pblk, bool graceful)
 static void pblk_exit(void *private, bool graceful)
 {
 	struct pblk *pblk = private;
+       sector_t i;
+       u32 *map;
+       u32 ppa32;
+
+       struct ppa_addr ppa;
+       pblk_ppa_set_empty(&ppa);
+
+       // prints lba-ppa map after exit - useful for colocation vulnerability
+       
+       pblk_info(pblk, "before gc_exit:: user_wa %lld, gc_wa %lld, pad_wa: %lld\n", atomic64_read(&pblk->user_wa), atomic64_read(&pblk->gc_wa), atomic64_read(&pblk->pad_wa));
+
+       map = (u32 *)pblk->trans_map;
+       for (i = 0; i < pblk->rl.nr_secs; i++){
+               if(map[i] != 4294967295 ) {
+                       ppa = pblk_ppa32_to_ppa64(pblk, map[i]);
+                       ppa32 = pblk_ppa64_to_ppa32(pblk, ppa);
+                       pr_info("lba=%lu ppa=%u grp=%d pu=%d chk=%d\n", i, ppa32, ppa.m.grp, ppa.m.pu, ppa.m.chk);
+               }
+       }
 
 	pblk_gc_exit(pblk, graceful);
 	pblk_tear_down(pblk, graceful);

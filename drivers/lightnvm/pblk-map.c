@@ -19,6 +19,45 @@
 
 #include "pblk.h"
 
+static void get_secs_reqd_per_lun(__le64 *lba_list, int *nr_secs_per_lun)
+{
+	// for now this function requests for 2 sectors per LUN
+	// this can later be extended to read and request for variable
+	// number of LUNs.
+       int i;
+       for (i = 0; i < 20 ;  i++) {
+               nr_secs_per_lun[i] = 2;
+       }
+}
+
+void pblk_line_close_holes(struct pblk *pblk, struct pblk_line *line)
+{
+      	// find minimum curr_sec.
+      	// invalidate all unset secs.
+	// for current test setup, there are 4 PUs each containing upto
+	// 16384 sectors.
+
+       	u64 min_paddr = 16385;
+       	int i;
+
+       	// find minimum cur_secs among the 4 PUs
+       	for(i = 0 ; i < 4; i++) {
+       	        if (min_paddr > line->cur_secs[i]) {
+                       min_paddr = line->cur_secs[i];
+          	}
+       	}
+
+      	while (min_paddr < 16344) {
+       	       test_and_set_bit(min_paddr, line->map_bitmap);
+       	       __pblk_map_invalidate(pblk, line, min_paddr++);
+       	}
+}
+
+// sentry = rb smem offset. ppa_list- populated in this function
+// meta_list = OOB region buffer for only valid_secs
+// valid_secs = map_secs = min secs to map or valid % min secs
+
+
 static int pblk_map_page_data(struct pblk *pblk, unsigned int sentry,
 			      struct ppa_addr *ppa_list,
 			      unsigned long *lun_bitmap,
@@ -28,41 +67,55 @@ static int pblk_map_page_data(struct pblk *pblk, unsigned int sentry,
 	struct pblk_line *line = pblk_line_get_data(pblk);
 	struct pblk_emeta *emeta;
 	struct pblk_w_ctx *w_ctx;
+
 	__le64 *lba_list;
-	u64 paddr;
 	int nr_secs = pblk->min_write_pgs;
 	int i;
+	int nr_secs_per_lun[20];
 
-	if (!line)
+	// assume current number of PUs are 20.
+
+	BUG_ON(nr_secs > 20);
+	u64 paddr_list[20];
+
+	if (!line) {
+		pr_info("%s():%d no line return\n",__func__, __LINE__);
 		return -ENOSPC;
+	}
 
-	if (pblk_line_is_full(line)) {
+	// line->left_msecs = 0, open new line.
+	if (pblk_line_is_full(line, pblk)) {
 		struct pblk_line *prev_line = line;
 
 		/* If we cannot allocate a new line, make sure to store metadata
 		 * on current line and then fail
 		 */
 		line = pblk_line_replace_data(pblk);
+	//	pblk_line_close_holes(pblk, prev_line);
 		pblk_line_close_meta(pblk, prev_line);
 
 		if (!line) {
 			pblk_pipeline_stop(pblk);
 			return -ENOSPC;
 		}
-
 	}
 
 	emeta = line->emeta;
 	lba_list = emeta_to_lbas(pblk, emeta->buf);
+	get_secs_reqd_per_lun(lba_list, nr_secs_per_lun);
 
-	paddr = pblk_alloc_page(pblk, line, nr_secs);
+	/* instead of getting the start paddr of a continuous chunk of 8 bytes, 
+	   allocate a list of discontinuous physical addresses and allocate them
+	   inside a paddr_list[] instead of paddr */
 
-	for (i = 0; i < nr_secs; i++, paddr++) {
+	pblk_alloc_page_data(pblk, line, nr_secs_per_lun, paddr_list, nr_secs);
+
+	for (i = 0; i < nr_secs; i++) {
 		struct pblk_sec_meta *meta = pblk_get_meta(pblk, meta_list, i);
 		__le64 addr_empty = cpu_to_le64(ADDR_EMPTY);
 
 		/* ppa to be sent to the device */
-		ppa_list[i] = addr_to_gen_ppa(pblk, paddr, line->id);
+		ppa_list[i] = addr_to_gen_ppa(pblk, paddr_list[i], line->id);
 
 		/* Write context for target bio completion on write buffer. Note
 		 * that the write buffer is protected by the sync backpointer,
@@ -76,15 +129,16 @@ static int pblk_map_page_data(struct pblk *pblk, unsigned int sentry,
 			w_ctx = pblk_rb_w_ctx(&pblk->rwb, sentry + i);
 			w_ctx->ppa = ppa_list[i];
 			meta->lba = cpu_to_le64(w_ctx->lba);
-			lba_list[paddr] = cpu_to_le64(w_ctx->lba);
-			if (lba_list[paddr] != addr_empty)
+			lba_list[paddr_list[i]] = cpu_to_le64(w_ctx->lba);
+			if (lba_list[paddr_list[i]] != addr_empty)
 				line->nr_valid_lbas++;
 			else
 				atomic64_inc(&pblk->pad_wa);
 		} else {
-			lba_list[paddr] = addr_empty;
+			lba_list[paddr_list[i]] = addr_empty;
 			meta->lba = addr_empty;
-			__pblk_map_invalidate(pblk, line, paddr);
+			pr_info("%s():valid secs = %d, i = %d\n",__func__,valid_secs, i);
+			__pblk_map_invalidate(pblk, line, paddr_list[i]);
 		}
 	}
 
@@ -170,6 +224,7 @@ int pblk_map_erase_rq(struct pblk *pblk, struct nvm_rq *rqd,
 		}
 		spin_unlock(&e_line->lock);
 	}
+	// return 0;
 
 	d_line = pblk_line_get_data(pblk);
 

@@ -482,6 +482,7 @@ struct pblk_line {
 
 	int left_msecs;			/* Sectors left for mapping */
 	unsigned int cur_sec;		/* Sector map pointer */
+	unsigned int *cur_secs;		/* Sector map pointers */
 	unsigned int nr_valid_lbas;	/* Number of valid lbas in line */
 
 	__le32 *vsc;			/* Valid sector count in line */
@@ -583,6 +584,7 @@ struct pblk_line_meta {
 
 	unsigned int blk_per_line;	/* Number of blocks in a full line */
 	unsigned int sec_per_line;	/* Number of sectors in a line */
+	unsigned int sec_per_line_per_lun;	/* Number of sectors in a line */
 	unsigned int dsec_per_line;	/* Number of data sectors in a line */
 	unsigned int min_blk_line;	/* Min. number of good blocks in line */
 
@@ -815,7 +817,8 @@ void pblk_line_recov_close(struct pblk *pblk, struct pblk_line *line);
 struct pblk_line *pblk_line_get_data(struct pblk *pblk);
 struct pblk_line *pblk_line_get_erase(struct pblk *pblk);
 int pblk_line_erase(struct pblk *pblk, struct pblk_line *line);
-int pblk_line_is_full(struct pblk_line *line);
+//int pblk_line_is_full(struct pblk_line *line);
+int pblk_line_is_full(struct pblk_line *line, struct pblk *pblk);
 void pblk_line_free(struct pblk_line *line);
 void pblk_line_close_meta(struct pblk *pblk, struct pblk_line *line);
 void pblk_line_close(struct pblk *pblk, struct pblk_line *line);
@@ -837,6 +840,8 @@ struct list_head *pblk_line_gc_list(struct pblk *pblk, struct pblk_line *line);
 u64 pblk_lookup_page(struct pblk *pblk, struct pblk_line *line);
 void pblk_dealloc_page(struct pblk *pblk, struct pblk_line *line, int nr_secs);
 u64 pblk_alloc_page(struct pblk *pblk, struct pblk_line *line, int nr_secs);
+void pblk_alloc_page_data(struct pblk *pblk, struct pblk_line *line, int *nr_secs_per_lun, u64*paddrs, int nr_secs);
+void __pblk_alloc_page_mdata(struct pblk *pblk, struct pblk_line *line, int *nr_secs_per_lun, u64*paddr_list, int nr_secs);
 u64 __pblk_alloc_page(struct pblk *pblk, struct pblk_line *line, int nr_secs);
 int pblk_calc_secs(struct pblk *pblk, unsigned long secs_avail,
 		   unsigned long secs_to_flush, bool skip_meta);
