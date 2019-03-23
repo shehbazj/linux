@@ -30,9 +30,6 @@ int pblk_rl_is_limit(struct pblk_rl *rl)
 
 	rb_space = atomic_read(&rl->rb_space);
 
-	if(rb_space == 0)
-		pr_info("%s(): rb_space is zero\n",__func__);
-
 	return (rb_space == 0);
 }
 
