@@ -147,7 +147,6 @@ static int pblk_l2p_recover(struct pblk *pblk, bool factory_init)
 	pblk_gc_free_full_lines(pblk);
 
 	if (!line) {
-		pr_info("%s():calling pblk_line_get_first_data\n",__func__);
 		/* Configure next line for user data */
 		line = pblk_line_get_first_data(pblk);
 		if (!line)
@@ -794,7 +793,6 @@ static long pblk_setup_line_meta(struct pblk *pblk, struct pblk_line *line,
 
 	atomic_set(&line->blk_in_line, chk_in_line);
 	list_add_tail(&line->list, &l_mg->free_list);
-	pr_info("%s():increment nr_free_lines = %d\n",__func__, l_mg->nr_free_lines);
 	l_mg->nr_free_lines++;
 
 	return chk_in_line;
@@ -986,8 +984,6 @@ static int pblk_line_meta_init(struct pblk *pblk)
 	lm->high_thrs = lm->sec_per_line / 4;
 	lm->meta_distance = (geo->all_luns / 2) * pblk->min_write_pgs;
 
-	pr_info("%s():sec_per_line=%d blk_per_line=%d blk_bitmap_len=%d sec_bitmap_len=%d lun_bitmap_len=%d", __func__, lm->sec_per_line, lm->blk_per_line, lm->blk_bitmap_len, lm->sec_bitmap_len, lm->lun_bitmap_len);
-
 	/* Calculate necessary pages for smeta. See comment over struct
 	 * line_smeta definition
 	 */
@@ -1002,7 +998,6 @@ add_smeta_page:
 		goto add_smeta_page;
 	}
 
-	pr_info("%s():smeta sec=%d smeta_len=%d lm->smeta_len=%d\n",__func__,lm->smeta_sec, smeta_len, lm->smeta_len);
 	/* Calculate necessary pages for emeta. See comment over struct
 	 * line_emeta definition
 	 */
@@ -1016,7 +1011,6 @@ add_emeta_page:
 		i++;
 		goto add_emeta_page;
 	}
-	pr_info("%s():emeta_len=%d lm->emeta_sec[0]=%d lm->emeta_len[0]=%d\n",__func__, emeta_len, lm->emeta_sec[0], lm->emeta_len[0]);
 
 	lm->emeta_bb = geo->all_luns > i ? geo->all_luns - i : 0;
 
@@ -1072,8 +1066,8 @@ static int pblk_lines_init(struct pblk *pblk)
 
 	for (i = 0; i < l_mg->nr_lines; i++) {
 		line = &pblk->lines[i];
-		line->cur_secs = kcalloc(geo->all_luns, sizeof(unsigned int), GFP_KERNEL);
 		// initialize cur_secs to appropriate positions on the stripe
+		line->cur_secs = kcalloc(geo->all_luns, sizeof(unsigned int), GFP_KERNEL);
 		for(j = 0 ; j < geo->all_luns ; j++) {
 			line->cur_secs[j] = j * pblk->min_write_pgs;
 		}
@@ -1174,25 +1168,6 @@ static void pblk_tear_down(struct pblk *pblk, bool graceful)
 static void pblk_exit(void *private, bool graceful)
 {
 	struct pblk *pblk = private;
-	sector_t i;
-	u32 *map;
-	u32 ppa32;
-
-	struct ppa_addr ppa;
-	pblk_ppa_set_empty(&ppa);
-
-	// prints lba-ppa map after exit - useful for colocation vulnerability
-	
-	pblk_info(pblk, "before gc_exit:: user_wa %lld, gc_wa %lld, pad_wa: %lld\n", atomic64_read(&pblk->user_wa), atomic64_read(&pblk->gc_wa), atomic64_read(&pblk->pad_wa));
-
-	map = (u32 *)pblk->trans_map;
-	for (i = 0; i < pblk->rl.nr_secs; i++){
-		if(map[i] != 4294967295 ) {
-			ppa = pblk_ppa32_to_ppa64(pblk, map[i]);
-			ppa32 = pblk_ppa64_to_ppa32(pblk, ppa);
-			pr_info("lba=%lu ppa=%u grp=%d pu=%d chk=%d\n", i, ppa32, ppa.m.grp, ppa.m.pu, ppa.m.chk);
-		}
-	}
 	pblk_gc_exit(pblk, graceful);
 	pblk_tear_down(pblk, graceful);
 
@@ -1292,7 +1267,6 @@ static void *pblk_init(struct nvm_tgt_dev *dev, struct gendisk *tdisk,
 		pblk_err(pblk, "could not initialize maps\n");
 		goto fail_free_rwb;
 	}
-	pblk_info(pblk, "after l2p_init:: user_wa %lld, gc_wa %lld, pad_wa: %lld\n", atomic64_read(&pblk->user_wa), atomic64_read(&pblk->gc_wa), atomic64_read(&pblk->pad_wa));
 
 	ret = pblk_writer_init(pblk);
 	if (ret) {

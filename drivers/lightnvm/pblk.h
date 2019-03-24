@@ -482,11 +482,9 @@ struct pblk_line {
 	atomic_t left_seblks;		/* Blocks left for sync erasing */
 
 	int left_msecs;			/* Sectors left for mapping */
-
 	unsigned int cur_sec;		/* Sector map pointer - only for metadata line */
 	unsigned int *cur_secs;		/* make this point to different "start" sectors
 					   corresponding to each PU - only for data line */
-
 	unsigned int nr_valid_lbas;	/* Number of valid lbas in line */
 
 	__le32 *vsc;			/* Valid sector count in line */
@@ -1022,14 +1020,12 @@ static inline int pblk_ppa_to_pos(struct nvm_geo *geo, struct ppa_addr p)
 	return p.a.lun * geo->num_ch + p.a.ch;
 }
 
-// XXX this is where ppa is converted to luns, chanls and secs
 static inline struct ppa_addr addr_to_gen_ppa(struct pblk *pblk, u64 paddr,
 					      u64 line_id)
 {
 	struct nvm_tgt_dev *dev = pblk->dev;
 	struct nvm_geo *geo = &dev->geo;
 	struct ppa_addr ppa;
-	u64 orig_paddr;
 
 	if (geo->version == NVM_OCSSD_SPEC_12) {
 		struct nvm_addrf_12 *ppaf = (struct nvm_addrf_12 *)&pblk->addrf;
@@ -1049,7 +1045,6 @@ static inline struct ppa_addr addr_to_gen_ppa(struct pblk *pblk, u64 paddr,
 
 		ppa.m.chk = line_id;
 
-		orig_paddr = paddr;
 		paddr = div_u64_rem(paddr, uaddrf->sec_stripe, &secs);
 		ppa.m.sec = secs;
 
@@ -1060,7 +1055,6 @@ static inline struct ppa_addr addr_to_gen_ppa(struct pblk *pblk, u64 paddr,
 		ppa.m.pu = luns;
 
 		ppa.m.sec += uaddrf->sec_stripe * paddr;
-
 	}
 
 	return ppa;
@@ -1153,8 +1147,8 @@ static inline void pblk_trans_map_set(struct pblk *pblk, sector_t lba,
 {
 	if (pblk->addrf_len < 32) {
 		u32 *map = (u32 *)pblk->trans_map;
+
 		map[lba] = pblk_ppa64_to_ppa32(pblk, ppa);
-//		pr_info("%s():lba=%lu secs %d chnls %d luns %d secs %d\n",__func__, lba, ppa.m.sec, ppa.m.grp, ppa.m.pu, ppa.m.sec);
 	} else {
 		u64 *map = (u64 *)pblk->trans_map;
 

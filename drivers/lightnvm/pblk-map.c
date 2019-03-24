@@ -19,6 +19,10 @@
 
 #include "pblk.h"
 
+/* function that would determine how many secs per lun have to be allocated.
+currently this function requests for 2 sectors per lun, but this can be variable.
+also, in the current setup, there are 4 PUs being used and sec_stripe is 8.
+*/
 static void get_secs_reqd_per_lun(__le64 *lba_list, int *nr_secs_per_lun)
 {
 	int i;
@@ -27,36 +31,27 @@ static void get_secs_reqd_per_lun(__le64 *lba_list, int *nr_secs_per_lun)
 	}
 }
 
+/* since there are asymetric writes to each PU, one chunk may be filled before
+other chunks on the line have been filled. in this scenario, we fill the other
+chunks by forcefully setting all data bits. */
 void pblk_line_close_holes(struct pblk *pblk, struct pblk_line *line)
 {
 	// find minimum curr_sec.
-	// invalidate all unset secs.
-	
-	u64 paddr = 16385;
+	u64 min_paddr = 16345;
 	int i;
 
 	// find minimum cur_secs
 	for(i = 0 ; i < 4; i++) {
-		if (paddr > line->cur_secs[i]) {
-			paddr = line->cur_secs[i];
+		if (min_paddr > line->cur_secs[i]) {
+			min_paddr = line->cur_secs[i];
 		}
 	}
 
-	if(paddr == 16385) {
-		pr_info("%s():no holes to fill\n", __func__);
-	}else {
-		pr_info("%s():start filling holes in line %d paddr %llu\n",__func__,line->id, paddr);
-	}
-	// XXX hardcoded, remove this...
-	while (paddr < 16344) {
-		test_and_set_bit(paddr, line->map_bitmap);
-		__pblk_map_invalidate(pblk, line, paddr++);
+	while (min_paddr < 16344) {
+		test_and_set_bit(min_paddr, line->map_bitmap);
+		__pblk_map_invalidate(pblk, line, min_paddr++);	
 	}
 }
-
-// sentry = rb smem offset. ppa_list- populated in this function
-// meta_list = OOB region buffer for only valid_secs
-// valid_secs = map_secs = min secs to map or valid % min secs
 
 static int pblk_map_page_data(struct pblk *pblk, unsigned int sentry,
 			      struct ppa_addr *ppa_list,
@@ -64,79 +59,52 @@ static int pblk_map_page_data(struct pblk *pblk, unsigned int sentry,
 			      void *meta_list,
 			      unsigned int valid_secs)
 {
-	// get l_mg.data line
 	struct pblk_line *line = pblk_line_get_data(pblk);
 	struct pblk_emeta *emeta;
 	struct pblk_w_ctx *w_ctx;
 
-	__le64 *lba_list, all_lbas[8];
+	__le64 *lba_list;
 	int nr_secs = pblk->min_write_pgs;
 	int i;
 
-	// XXX change 20 to nr_luns
+	// assume number of PUs do not exceed 20 for now.
+	BUG_ON(nr_secs > 20);
 	int nr_secs_per_lun[20];
-	// XXX change 20 to nr_secs / pblk->min_write_pgs;
 	u64 paddr_list[20];
 
-	BUG_ON(nr_secs > 20);
-
-	if (!line) {
-		pr_info("%s():%d no line return\n",__func__, __LINE__);
+	if (!line)
 		return -ENOSPC;
-	}
 
-	// line->left_msecs = 0, open new line.
 	if (pblk_line_is_full(line, pblk)) {
 		struct pblk_line *prev_line = line;
 
 		/* If we cannot allocate a new line, make sure to store metadata
 		 * on current line and then fail
 		 */
-		pr_info("%s():calling line replace data\n",__func__);
 		line = pblk_line_replace_data(pblk);
 		pblk_line_close_holes(pblk, prev_line);
-		pr_info("%s():calling line close meta\n",__func__);
 		pblk_line_close_meta(pblk, prev_line);
-		//pblk_line_close(pblk, prev_line);
 
 		if (!line) {
-			pr_info("%s():%d no line return\n",__func__, __LINE__);
-			for(i=0; i < 16;i++) {
-				pr_info("%s():line %d refcount=%d\n",__func__, i, atomic_read(((atomic_t *)(&pblk->lines[i].ref.refcount.refs))));
-			}
 			pblk_pipeline_stop(pblk);
 			return -ENOSPC;
 		}
 	}
 
-	// end meta
 	emeta = line->emeta;
-	// this is to store lbas from [rb w_ctx->lba] in the endmeta buffer
 	lba_list = emeta_to_lbas(pblk, emeta->buf);
 	get_secs_reqd_per_lun(lba_list, nr_secs_per_lun);
 
-	// get all lbas first:
-	for (i = 0 ; i < valid_secs ; i++) {
-		w_ctx = pblk_rb_w_ctx(&pblk->rwb, sentry + i);
-		all_lbas[i] = cpu_to_le64(w_ctx->lba);
-//		pr_info("%s():mapping lba %llu\n", __func__,all_lbas[i]);
-	}
-
-	// nr_secs = min write pages = 8
-
-//	pr_info("%s():calling pblk alloc page data\n",__func__);
-	pblk_alloc_page_data(pblk, line, nr_secs_per_lun, paddr_list, nr_secs);
-//	for(i = 0 ; i < nr_secs; i++ ){
-//		pr_info("%s(): paddr returned = %llu\n",__func__, paddr_list[i]);
+//	for (i = 0 ; i < valid_secs ; i++) {
+//		w_ctx = pblk_rb_w_ctx(&pblk->rwb, sentry + i);
 //	}
-//	paddr = pblk_alloc_page(pblk, line, nr_secs);
 
+	pblk_alloc_page_data(pblk, line, nr_secs_per_lun, paddr_list, nr_secs);
 	for (i = 0; i < nr_secs; i++ /*, paddr++ */) {
 		struct pblk_sec_meta *meta = pblk_get_meta(pblk, meta_list, i);
 		__le64 addr_empty = cpu_to_le64(ADDR_EMPTY);
 
 		/* ppa to be sent to the device */
-		//pr_info("%s():paddr=%llu\n", __func__,paddr_list[i]);
 
 		/* Write context for target bio completion on write buffer. Note
 		 * that the write buffer is protected by the sync backpointer,
@@ -153,7 +121,6 @@ static int pblk_map_page_data(struct pblk *pblk, unsigned int sentry,
 			w_ctx->ppa = ppa_list[i];
 			meta->lba = cpu_to_le64(w_ctx->lba);
 			lba_list[paddr_list[i]] = cpu_to_le64(w_ctx->lba);
-//			pr_info("%s():lba = %llu ppa = %llu\n", __func__, lba_list[paddr_list[i]], paddr_list[i]);
 			if (lba_list[paddr_list[i]] != addr_empty)
 				line->nr_valid_lbas++;
 			else
@@ -166,17 +133,13 @@ static int pblk_map_page_data(struct pblk *pblk, unsigned int sentry,
 	}
 
 	pblk_down_rq(pblk, ppa_list[0], lun_bitmap);
-//	pr_info("%s():exit\n",__func__);
 	return 0;
 }
 
-// sentry = old subm. valid_secs = secs_available, off = 0
-// return 0 - good execution. might return -ENOSPC.
 int pblk_map_rq(struct pblk *pblk, struct nvm_rq *rqd, unsigned int sentry,
 		 unsigned long *lun_bitmap, unsigned int valid_secs,
 		 unsigned int off)
 {
-	// get OOB area that contains page metadata
 	void *meta_list = pblk_get_meta_for_writes(pblk, rqd);
 	void *meta_buffer;
 	struct ppa_addr *ppa_list = nvm_rq_to_ppa_list(rqd);
@@ -185,28 +148,20 @@ int pblk_map_rq(struct pblk *pblk, struct nvm_rq *rqd, unsigned int sentry,
 	int i;
 	int ret;
 
-//	pr_info("%s():init\n",__func__);
 	for (i = off; i < rqd->nr_ppas; i += min) {
-		// keep mapping min secs at a time. other than the last
-		// write where we map only valid secs % min.
 		map_secs = (i + min > valid_secs) ? (valid_secs % min) : min;
-		// query the OOB metalist that returns i offset of the list
 		meta_buffer = pblk_get_meta(pblk, meta_list, i);
-		// map each buffer in cacheline to write context.
+
 		ret = pblk_map_page_data(pblk, sentry + i, &ppa_list[i],
 					lun_bitmap, meta_buffer, map_secs);
-		if (ret) {
-			pr_info("%s():exit with ret %d\n",__func__, ret);
+		if (ret)
 			return ret;
-		}
 	}
 
-//	pr_info("%s():exit\n",__func__);
 	return 0;
 }
 
 /* only if erase_ppa is set, acquire erase semaphore */
-// populates erase_ppa with ppas that need to be erased.
 int pblk_map_erase_rq(struct pblk *pblk, struct nvm_rq *rqd,
 		       unsigned int sentry, unsigned long *lun_bitmap,
 		       unsigned int valid_secs, struct ppa_addr *erase_ppa)
@@ -223,39 +178,26 @@ int pblk_map_erase_rq(struct pblk *pblk, struct nvm_rq *rqd,
 	int i, erase_lun;
 	int ret;
 
-	pr_info("%s():nr_ppas=%d\n",__func__,rqd->nr_ppas);
 	for (i = 0; i < rqd->nr_ppas; i += min) {
 		map_secs = (i + min > valid_secs) ? (valid_secs % min) : min;
-		// get meta for only 1 ppa.
 		meta_buffer = pblk_get_meta(pblk, meta_list, i);
-		// map sectors after sentry in write context - sentry + i
-		// of size map_secs.	
 		ret = pblk_map_page_data(pblk, sentry + i, &ppa_list[i],
 					lun_bitmap, meta_buffer, map_secs);
-		if (ret) {
-			pr_info("%s():failed to map page data\n",__func__);
+		if (ret)
 			return ret;
-		}
 
 		erase_lun = pblk_ppa_to_pos(geo, ppa_list[i]);
-
-		pr_info("%s():bitmap len=%d\n",__func__,lm->blk_bitmap_len);
 
 		/* line can change after page map. We might also be writing the
 		 * last line.
 		 */
 		e_line = pblk_line_get_erase(pblk);
-		if (!e_line) {
-			pr_info("%s():did not get erase line call and return pblk_map_rq\n",__func__);
+		if (!e_line)
 			return pblk_map_rq(pblk, rqd, sentry, lun_bitmap,
 							valid_secs, i + min);
-		}else {
-			pr_info("%s():got next erase line %d\n", __func__,e_line->id);
-		}
 
 		spin_lock(&e_line->lock);
 		if (!test_bit(erase_lun, e_line->erase_bitmap)) {
-			pr_info("%s():erase_lun %d was unset\n", __func__, erase_lun);
 			set_bit(erase_lun, e_line->erase_bitmap);
 			atomic_dec(&e_line->left_eblks);
 
@@ -264,37 +206,30 @@ int pblk_map_erase_rq(struct pblk *pblk, struct nvm_rq *rqd,
 
 			spin_unlock(&e_line->lock);
 
-			pr_info("%s():return after pblk_map_rq\n",__func__);
 			/* Avoid evaluating e_line->left_eblks */
 			return pblk_map_rq(pblk, rqd, sentry, lun_bitmap,
 							valid_secs, i + min);
-		} else {
-		 	pr_info("%s(): erase_bitmap for erase lun %d is set\n", __func__, erase_lun);
-		//	return pblk_map_rq(pblk, rqd, sentry, lun_bitmap,
-                //                                      valid_secs, i + min);
 		}
 		spin_unlock(&e_line->lock);
 	}
+	// premature return from here. dont know why exactly.
 	return 0;
 
 	d_line = pblk_line_get_data(pblk);
-	pr_info("%s():data line = %d\n",__func__, d_line->id);
 
 	/* line can change after page map. We might also be writing the
 	 * last line.
 	 */
 	e_line = pblk_line_get_erase(pblk);
-	pr_info("%s():erase line = %d\n",__func__, e_line->id);
 	if (!e_line)
 		return -ENOSPC;
 
 	/* Erase blocks that are bad in this line but might not be in next */
-	if (unlikely(pblk_ppa_empty(*erase_ppa)) && 
-		bitmap_weight(d_line->blk_bitmap, lm->blk_per_line)) {
+	if (unlikely(pblk_ppa_empty(*erase_ppa)) &&
+			bitmap_weight(d_line->blk_bitmap, lm->blk_per_line)) {
 		int bit = -1;
 
 retry:
-		pr_info("%s():retry\n",__func__);
 		bit = find_next_bit(d_line->blk_bitmap,
 						lm->blk_per_line, bit + 1);
 		if (bit >= lm->blk_per_line)
@@ -311,8 +246,6 @@ retry:
 		atomic_dec(&e_line->left_eblks);
 		*erase_ppa = pblk->luns[bit].bppa; /* set ch and lun */
 		erase_ppa->a.blk = e_line->id;
-	}else {
-		pr_info("%s():exit():bitmap weight %d\n",__func__, bitmap_weight(d_line->blk_bitmap, lm->blk_per_line));
 	}
 
 	return 0;
