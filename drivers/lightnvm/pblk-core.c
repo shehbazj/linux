@@ -183,7 +183,6 @@ void __pblk_map_invalidate(struct pblk *pblk, struct pblk_line *line,
 
 	if (line->state == PBLK_LINESTATE_CLOSED)
 		move_list = pblk_line_gc_list(pblk, line);
-
 	spin_unlock(&line->lock);
 
 	if (move_list) {
@@ -223,6 +222,7 @@ static void pblk_invalidate_range(struct pblk *pblk, sector_t slba,
 				  unsigned int nr_secs)
 {
 	sector_t lba;
+
 	spin_lock(&pblk->trans_lock);
 	for (lba = slba; lba < slba + nr_secs; lba++) {
 		struct ppa_addr ppa;
@@ -765,7 +765,7 @@ void __pblk_alloc_page_mdata(struct pblk *pblk, struct pblk_line *line, int *nr_
 			WARN(1, "pblk: page allocation out of bounds cur secs = %d lun = %d nr_secs_per_lun %d pblk->lm.sec_per_line_per_lun %d\n", line->cur_secs[lun], lun, nr_secs_per_lun[lun], pblk->lm.sec_per_line_per_lun);
 			nr_secs_per_lun[lun] = pblk->lm.sec_per_line - line->cur_secs[lun];
 		}
-		
+
 		// addr is the next 0 sector in line->map_bitmap. instead, skip and
 		// find the pa that corresponds to the PU in which current lba is to be mapped.
 		nr_secs_curr_lun = nr_secs_per_lun[lun];
@@ -1484,12 +1484,6 @@ retry:
 	}
 
 	line = list_first_entry(&l_mg->free_list, struct pblk_line, list);
-//	if (line == NULL) {
-//		pr_info("%s():no entry in free_list, retry\n",__func__);
-//		goto retry;
-//	}
-//	pr_info("%s():first entry in free_list=%d decrease nr_free_lines %d\n",__func__, line->id, l_mg->nr_free_lines);
-	//line = min_refs_line;
 	list_del(&line->list);
 	l_mg->nr_free_lines--;
 
