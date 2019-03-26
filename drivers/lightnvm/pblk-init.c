@@ -108,6 +108,15 @@ static size_t pblk_trans_map_size(struct pblk *pblk)
 	return entry_size * pblk->rl.nr_secs;
 }
 
+static size_t pblk_p2l_map_size(struct pblk *pblk)
+{
+	struct nvm_tgt_dev *dev = pblk->dev;
+	struct nvm_geo *geo = &dev->geo;
+	size_t num_sectors = geo->total_secs;
+
+	return num_sectors;
+}
+
 #ifdef CONFIG_NVM_PBLK_DEBUG
 static u32 pblk_l2p_crc(struct pblk *pblk)
 {
@@ -123,6 +132,9 @@ static u32 pblk_l2p_crc(struct pblk *pblk)
 static void pblk_l2p_free(struct pblk *pblk)
 {
 	vfree(pblk->trans_map);
+	vfree(pblk->p2l_map);
+	vfree(pblk->lba_pu_map);
+	vfree(pblk->ppa_original_adjusted);
 }
 
 static int pblk_l2p_recover(struct pblk *pblk, bool factory_init)
@@ -161,11 +173,27 @@ static int pblk_l2p_init(struct pblk *pblk, bool factory_init)
 	sector_t i;
 	struct ppa_addr ppa;
 	size_t map_size;
+	size_t p2l_map_size;
+	size_t lba_pu_map_size;
+	size_t ppa_original_adjusted_size;
 	int ret = 0;
 
 	map_size = pblk_trans_map_size(pblk);
+	p2l_map_size = pblk_p2l_map_size(pblk);
+	lba_pu_map_size = p2l_map_size;
+	ppa_original_adjusted_size = p2l_map_size;
 	pblk->trans_map = vmalloc(map_size);
 	if (!pblk->trans_map)
+		return -ENOMEM;
+	pblk->p2l_map = vmalloc(p2l_map_size * sizeof(u32));
+	if (!pblk->p2l_map)
+		return -ENOMEM;
+	// size of both p2l_map and lba_pu_map is the same
+	pblk->lba_pu_map = vmalloc(lba_pu_map_size * sizeof(u32));
+	if (!pblk->lba_pu_map)
+		return -ENOMEM;
+	pblk->ppa_original_adjusted = vmalloc(ppa_original_adjusted_size * sizeof(u32));
+	if (!pblk->ppa_original_adjusted)
 		return -ENOMEM;
 
 	pblk_ppa_set_empty(&ppa);
@@ -173,9 +201,20 @@ static int pblk_l2p_init(struct pblk *pblk, bool factory_init)
 	for (i = 0; i < pblk->rl.nr_secs; i++)
 		pblk_trans_map_set(pblk, i, ppa);
 
+	for (i = 0; i < lba_pu_map_size; i++)
+		pblk_lba_pu_map_set(pblk, i);
+
+	for (i = 0; i < ppa_original_adjusted_size ; i++)
+		pblk_ppa_original_adjusted_set(pblk, i, ppa);
+
 	ret = pblk_l2p_recover(pblk, factory_init);
-	if (ret)
+
+	if (ret) {
 		vfree(pblk->trans_map);
+		vfree(pblk->p2l_map);
+		vfree(pblk->lba_pu_map);
+		vfree(pblk->ppa_original_adjusted);
+	}
 
 	return ret;
 }
@@ -588,6 +627,7 @@ static void pblk_lines_free(struct pblk *pblk)
 	for (i = 0; i < l_mg->nr_lines; i++) {
 		line = &pblk->lines[i];
 
+		kfree(line->cur_secs);
 		pblk_line_free(line);
 		pblk_line_meta_free(l_mg, line);
 	}
@@ -1032,7 +1072,10 @@ static int pblk_lines_init(struct pblk *pblk)
 	struct pblk_line *line;
 	void *chunk_meta;
 	int nr_free_chks = 0;
-	int i, ret;
+	int i,j,ret;
+        struct nvm_tgt_dev *dev = pblk->dev;
+        struct nvm_geo *geo = &dev->geo;
+
 
 	ret = pblk_line_meta_init(pblk);
 	if (ret)
@@ -1061,6 +1104,11 @@ static int pblk_lines_init(struct pblk *pblk)
 
 	for (i = 0; i < l_mg->nr_lines; i++) {
 		line = &pblk->lines[i];
+                // initialize cur_secs to appropriate positions on the stripe
+                line->cur_secs = kcalloc(geo->all_luns, sizeof(unsigned int), GFP_KERNEL);
+                for(j = 0 ; j < geo->all_luns ; j++) {
+                        line->cur_secs[j] = 0;
+                }
 
 		ret = pblk_alloc_line_meta(pblk, line);
 		if (ret)
