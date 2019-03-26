@@ -729,6 +729,7 @@ int pblk_line_smeta_read(struct pblk *pblk, struct pblk_line *line)
 	u64 paddr = pblk_line_smeta_start(pblk, line);
 	int i, ret;
 
+	pr_info("%s():paddr for pblk_line_smeta_start()= %llu line=%d\n",__func__, paddr, line->id);
 	memset(&rqd, 0, sizeof(struct nvm_rq));
 
 	ret = pblk_alloc_rqd_meta(pblk, &rqd);
@@ -749,8 +750,10 @@ int pblk_line_smeta_read(struct pblk *pblk, struct pblk_line *line)
 	rqd.nr_ppas = lm->smeta_sec;
 	rqd.is_seq = 1;
 
-	for (i = 0; i < lm->smeta_sec; i++, paddr++)
+	for (i = 0; i < lm->smeta_sec; i++, paddr++) {
+		pr_info("%s():paddr pblk_line_smeta_start()= %llu line=%d\n",__func__, paddr, line->id);
 		rqd.ppa_list[i] = addr_to_gen_ppa(pblk, paddr, line->id);
+	}
 
 	ret = pblk_submit_io_sync(pblk, &rqd);
 	if (ret) {
@@ -800,6 +803,7 @@ static int pblk_line_smeta_write(struct pblk *pblk, struct pblk_line *line,
 	rqd.nr_ppas = lm->smeta_sec;
 	rqd.is_seq = 1;
 
+	pr_info("%s():in pblk_line_smeta_write paddr = %llu line=%d lm->smeta_sec=%d\n",__func__, paddr, line->id, lm->smeta_sec);
 	for (i = 0; i < lm->smeta_sec; i++, paddr++) {
 		struct pblk_sec_meta *meta = pblk_get_meta(pblk,
 							   rqd.meta_list, i);
@@ -846,6 +850,7 @@ int pblk_line_emeta_read(struct pblk *pblk, struct pblk_line *line,
 	int i, j;
 	int ret;
 
+	pr_info("%s(): emeta addr = %llu\n", __func__, paddr);
 	meta_list = nvm_dev_dma_alloc(dev->parent, GFP_KERNEL,
 							&dma_meta_list);
 	if (!meta_list)
@@ -893,6 +898,7 @@ next_rq:
 				goto free_rqd_dma;
 			}
 
+			pr_info("%s():ppa %llu incremented by min = %d for line = %d\n",__func__, ppa.ppa, min, line->id);
 			ppa = addr_to_gen_ppa(pblk, paddr, line_id);
 			pos = pblk_ppa_to_pos(geo, ppa);
 		}
@@ -903,8 +909,10 @@ next_rq:
 			goto free_rqd_dma;
 		}
 
-		for (j = 0; j < min; j++, i++, paddr++)
+		for (j = 0; j < min; j++, i++, paddr++) {
+			pr_info("%s(): paddr %llu incremented again for line %d\n", __func__, ppa.ppa, line->id );
 			rqd.ppa_list[i] = addr_to_gen_ppa(pblk, paddr, line_id);
+		}
 	}
 
 	ret = pblk_submit_io_sync(pblk, &rqd);
@@ -1801,7 +1809,21 @@ struct pblk_line *pblk_line_get_erase(struct pblk *pblk)
 
 int pblk_line_is_full(struct pblk_line *line)
 {
-	return (line->left_msecs == 0);
+	int i;
+	if (line->left_msecs == 0) {
+		pr_info("%s():cur_sec=%d\n",__func__,line->cur_sec);
+		line->cur_sec = 16344;
+		return 1;
+	}
+	for (i = 0 ; i < 4 ; i++) {
+		if(line->cur_secs[i] >= 4095) {
+			pr_info("%s():readjusting cur_sec to 16344\n",__func__);
+			line->cur_sec = 16344;
+			line->left_msecs = 0;
+			return 1;
+		}
+	}
+	return 0;
 }
 
 static void pblk_line_should_sync_meta(struct pblk *pblk)
@@ -2068,6 +2090,7 @@ int pblk_update_map_gc(struct pblk *pblk, sector_t lba, struct ppa_addr ppa_new,
 
 	spin_lock(&pblk->trans_lock);
 	ppa_l2p = pblk_trans_map_get(pblk, lba);
+	pr_info("%s(): updating paddr_gc %llu\n",__func__, paddr_gc);
 	ppa_gc = addr_to_gen_ppa(pblk, paddr_gc, gc_line->id);
 
 	if (!pblk_ppa_comp(ppa_l2p, ppa_gc)) {
