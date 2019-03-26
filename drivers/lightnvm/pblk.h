@@ -482,6 +482,7 @@ struct pblk_line {
 
 	int left_msecs;			/* Sectors left for mapping */
 	unsigned int cur_sec;		/* Sector map pointer */
+	unsigned int *cur_secs;		/* Sector map pointer */
 	unsigned int nr_valid_lbas;	/* Number of valid lbas in line */
 
 	__le32 *vsc;			/* Valid sector count in line */
@@ -697,6 +698,15 @@ struct pblk {
 	 * addresses are used when writing to the disk block device.
 	 */
 	unsigned char *trans_map;
+	/* add translation map from physical address to logical addresses. This
+	 * helps in translating physical pages based on LBA based mapping schemes.
+	 */
+	u32 *p2l_map;
+	/* contains mapping of LBA to PUs */
+	u32 *lba_pu_map;
+	/* contains mapping of ppa_original to ppa_adjusted*/
+	u32 *ppa_original_adjusted;
+
 	spinlock_t trans_lock;
 
 	struct list_head compl_list;
@@ -1013,12 +1023,40 @@ static inline int pblk_ppa_to_pos(struct nvm_geo *geo, struct ppa_addr p)
 	return p.a.lun * geo->num_ch + p.a.ch;
 }
 
+/* given a PPA we determine the exact sector offset of the PPA in the device.
+ * this is used to translate ppa's to sector numbers to maintain mapping info
+*/
+static int ppa_linear_offset(struct pblk *pblk, struct ppa_addr ppa)
+{
+	struct nvm_tgt_dev *dev = pblk->dev;
+	struct nvm_geo *geo = &dev->geo;
+
+	int line_id = ppa.m.chk;		// id for line
+	int num_sec = geo->total_secs;	// total number of sectors
+	int num_luns = geo->all_luns;
+	int chk_size = geo->clba;	// sectors per chunk
+	int num_lines = num_sec / (chk_size * num_luns);
+	int line_off  = line_id * (num_sec / num_lines);
+	int chk_off   = ppa.m.pu * chk_size;
+	int sec_off   = ppa.m.sec;
+	int ppa_off = line_off + chk_off + sec_off;
+
+	return ppa_off;
+}
+
 static inline struct ppa_addr addr_to_gen_ppa(struct pblk *pblk, u64 paddr,
 					      u64 line_id)
 {
 	struct nvm_tgt_dev *dev = pblk->dev;
 	struct nvm_geo *geo = &dev->geo;
-	struct ppa_addr ppa;
+
+	u32 * ppa_original_adjusted_map = pblk->ppa_original_adjusted;
+	__le64 addr_empty = cpu_to_le64(ADDR_EMPTY);
+
+	// ppa_original is the ppa that we get based on original computations.
+	// ppa_adjusted is the new ppa that we assign based on LBA access frequency.
+	struct ppa_addr ppa, ppa_original, ppa_adjusted;
+	int ppa_original_linear_off, ppa_adjusted_linear_off;
 
 	if (geo->version == NVM_OCSSD_SPEC_12) {
 		struct nvm_addrf_12 *ppaf = (struct nvm_addrf_12 *)&pblk->addrf;
@@ -1034,23 +1072,31 @@ static inline struct ppa_addr addr_to_gen_ppa(struct pblk *pblk, u64 paddr,
 		struct pblk_addrf *uaddrf = &pblk->uaddrf;
 		int secs, chnls, luns;
 
-		ppa.ppa = 0;
-
-		ppa.m.chk = line_id;
+		ppa_original.ppa = 0;
+		// line_id remains the same.
+		ppa_original.m.chk = line_id;
 
 		paddr = div_u64_rem(paddr, uaddrf->sec_stripe, &secs);
-		ppa.m.sec = secs;
+		ppa_original.m.sec = secs;
 
 		paddr = div_u64_rem(paddr, uaddrf->ch_stripe, &chnls);
-		ppa.m.grp = chnls;
+		ppa_original.m.grp = chnls;
 
 		paddr = div_u64_rem(paddr, uaddrf->lun_stripe, &luns);
-		ppa.m.pu = luns;
+		ppa_original.m.pu = luns;
 
-		ppa.m.sec += uaddrf->sec_stripe * paddr;
+		ppa_original.m.sec += uaddrf->sec_stripe * paddr;
+		/*
+		ppa_original_linear_off = ppa_linear_offset(pblk,ppa);
+		if(ppa_original_adjusted_map[ppa_original_linear_off] == ADDR_EMPTY) {
+			// create a new adjusted mapping for ppa_original
+		}else {
+			// mapping exists already. return already mapped ppa_original
+		}
+		*/
 	}
 
-	return ppa;
+	return ppa_original;
 }
 
 static inline struct nvm_chk_meta *pblk_dev_ppa_to_chunk(struct pblk *pblk,
@@ -1135,17 +1181,46 @@ static inline struct ppa_addr pblk_trans_map_get(struct pblk *pblk,
 	return ppa;
 }
 
+/* for now, map each lba to different PUs */
+static inline void pblk_lba_pu_map_set(struct pblk *pblk, sector_t lba)
+{
+	pblk->lba_pu_map[lba] = lba % 4;
+}
+
+
+static inline void pblk_ppa_original_adjusted_set(struct pblk *pblk, sector_t lba,
+						struct ppa_addr ppa)
+{
+	pblk->ppa_original_adjusted[lba] = ppa.ppa;
+}
+
 static inline void pblk_trans_map_set(struct pblk *pblk, sector_t lba,
 						struct ppa_addr ppa)
 {
+	int ppa_off = ppa_linear_offset(pblk, ppa);
+	struct nvm_tgt_dev *dev = pblk->dev;
+	struct nvm_geo *geo = &dev->geo;
+	int num_sec = geo->total_secs;
+
 	if (pblk->addrf_len < 32) {
+		u32 *p2l_map;
 		u32 *map = (u32 *)pblk->trans_map;
 
 		map[lba] = pblk_ppa64_to_ppa32(pblk, ppa);
+
+		p2l_map = (u32 *)pblk->p2l_map;
+
+		if(ppa_off < num_sec)
+			p2l_map[ppa_off] = lba;
 	} else {
+		u64 *p2l_map;
 		u64 *map = (u64 *)pblk->trans_map;
 
 		map[lba] = ppa.ppa;
+
+		p2l_map = (u64 *)pblk->p2l_map;
+		if(ppa_off < num_sec)
+			p2l_map[ppa.ppa] = lba;
 	}
 }
 
