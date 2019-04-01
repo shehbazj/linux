@@ -59,7 +59,7 @@ static int pblk_recov_l2p_from_emeta(struct pblk *pblk, struct pblk_line *line)
 		struct ppa_addr ppa;
 		int pos;
 
-		ppa = addr_to_gen_ppa(pblk, i, line->id);
+		ppa = addr_to_gen_ppa(pblk, i, line->id, -2);
 		pos = pblk_ppa_to_pos(geo, ppa);
 
 		/* Do not update bad blocks */
@@ -229,12 +229,12 @@ next_pad_rq:
 		int pos;
 
 		w_ptr = pblk_alloc_page(pblk, line, pblk->min_write_pgs);
-		ppa = addr_to_gen_ppa(pblk, w_ptr, line->id);
+		ppa = addr_to_gen_ppa(pblk, w_ptr, line->id, -2);
 		pos = pblk_ppa_to_pos(geo, ppa);
 
 		while (test_bit(pos, line->blk_bitmap)) {
 			w_ptr += pblk->min_write_pgs;
-			ppa = addr_to_gen_ppa(pblk, w_ptr, line->id);
+			ppa = addr_to_gen_ppa(pblk, w_ptr, line->id, -2);
 			pos = pblk_ppa_to_pos(geo, ppa);
 		}
 
@@ -243,7 +243,7 @@ next_pad_rq:
 			struct pblk_sec_meta *meta;
 			__le64 addr_empty = cpu_to_le64(ADDR_EMPTY);
 
-			dev_ppa = addr_to_gen_ppa(pblk, w_ptr, line->id);
+			dev_ppa = addr_to_gen_ppa(pblk, w_ptr, line->id, -2);
 
 			pblk_map_invalidate(pblk, dev_ppa);
 			lba_list[w_ptr] = addr_empty;
@@ -276,7 +276,7 @@ next_pad_rq:
 		ret = -ETIME;
 	}
 
-	if (!pblk_line_is_full(line))
+	if (!pblk_line_is_full(line, pblk))
 		pblk_err(pblk, "corrupted padded line: %d\n", line->id);
 
 	vfree(data);
@@ -400,18 +400,18 @@ retry_rq:
 		struct ppa_addr ppa;
 		int pos;
 
-		ppa = addr_to_gen_ppa(pblk, paddr, line->id);
+		ppa = addr_to_gen_ppa(pblk, paddr, line->id, -2);
 		pos = pblk_ppa_to_pos(geo, ppa);
 
 		while (test_bit(pos, line->blk_bitmap)) {
 			paddr += pblk->min_write_pgs;
-			ppa = addr_to_gen_ppa(pblk, paddr, line->id);
+			ppa = addr_to_gen_ppa(pblk, paddr, line->id, -2);
 			pos = pblk_ppa_to_pos(geo, ppa);
 		}
 
 		for (j = 0; j < pblk->min_write_pgs; j++, i++)
 			rqd->ppa_list[i] =
-				addr_to_gen_ppa(pblk, paddr + j, line->id);
+				addr_to_gen_ppa(pblk, paddr + j, line->id, -2);
 	}
 
 	ret = pblk_submit_io_sync(pblk, rqd);
@@ -466,7 +466,7 @@ retry_rq:
 		goto next_rq;
 
 #ifdef CONFIG_NVM_PBLK_DEBUG
-	WARN_ON(padded && !pblk_line_is_full(line));
+	WARN_ON(padded && !pblk_line_is_full(line, pblk));
 #endif
 
 	return 0;
@@ -514,7 +514,7 @@ static int pblk_recov_l2p_from_oob(struct pblk *pblk, struct pblk_line *line)
 		goto out;
 	}
 
-	if (pblk_line_is_full(line))
+	if (pblk_line_is_full(line, pblk))
 		pblk_line_recov_close(pblk, line);
 
 out:
@@ -554,7 +554,7 @@ static u64 pblk_line_emeta_start(struct pblk *pblk, struct pblk_line *line)
 
 	while (emeta_secs) {
 		emeta_start--;
-		ppa = addr_to_gen_ppa(pblk, emeta_start, line->id);
+		ppa = addr_to_gen_ppa(pblk, emeta_start, line->id, -2);
 		pos = pblk_ppa_to_pos(geo, ppa);
 		if (!test_bit(pos, line->blk_bitmap))
 			emeta_secs--;
@@ -779,7 +779,7 @@ struct pblk_line *pblk_recov_l2p(struct pblk *pblk)
 			pblk_recov_l2p_from_oob(pblk, line);
 
 next:
-		if (pblk_line_is_full(line)) {
+		if (pblk_line_is_full(line,pblk)) {
 			struct list_head *move_list;
 
 			spin_lock(&line->lock);

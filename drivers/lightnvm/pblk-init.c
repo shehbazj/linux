@@ -1107,7 +1107,7 @@ static int pblk_lines_init(struct pblk *pblk)
                 // initialize cur_secs to appropriate positions on the stripe
                 line->cur_secs = kcalloc(geo->all_luns, sizeof(unsigned int), GFP_KERNEL);
                 for(j = 0 ; j < geo->all_luns ; j++) {
-                        line->cur_secs[j] = 0;
+                        line->cur_secs[j] = 20;
                 }
 
 		ret = pblk_alloc_line_meta(pblk, line);

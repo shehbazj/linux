@@ -36,7 +36,7 @@ static int pblk_map_page_data(struct pblk *pblk, unsigned int sentry,
 	if (!line)
 		return -ENOSPC;
 
-	if (pblk_line_is_full(line)) {
+	if (pblk_line_is_full(line, pblk)) {
 		struct pblk_line *prev_line = line;
 
 		/* If we cannot allocate a new line, make sure to store metadata
@@ -49,7 +49,6 @@ static int pblk_map_page_data(struct pblk *pblk, unsigned int sentry,
 			pblk_pipeline_stop(pblk);
 			return -ENOSPC;
 		}
-
 	}
 
 	emeta = line->emeta;
@@ -62,7 +61,8 @@ static int pblk_map_page_data(struct pblk *pblk, unsigned int sentry,
 		__le64 addr_empty = cpu_to_le64(ADDR_EMPTY);
 
 		/* ppa to be sent to the device */
-		ppa_list[i] = addr_to_gen_ppa(pblk, paddr, line->id);
+		// use meta->lba to determine PU for paddr in addr_to_gen_ppa()
+		ppa_list[i] = addr_to_gen_ppa(pblk, paddr, line->id, meta->lba);
 
 		/* Write context for target bio completion on write buffer. Note
 		 * that the write buffer is protected by the sync backpointer,

@@ -687,7 +687,7 @@ u64 pblk_alloc_page(struct pblk *pblk, struct pblk_line *line, int nr_secs)
 	spin_lock(&line->lock);
 	addr = __pblk_alloc_page(pblk, line, nr_secs);
 	line->left_msecs -= nr_secs;
-	WARN(line->left_msecs < 0, "pblk: page allocation out of bounds\n");
+	WARN(line->left_msecs < 0, "pblk: page allocation out of bounds %d\n", line->left_msecs);
 	spin_unlock(&line->lock);
 
 	return addr;
@@ -729,7 +729,6 @@ int pblk_line_smeta_read(struct pblk *pblk, struct pblk_line *line)
 	u64 paddr = pblk_line_smeta_start(pblk, line);
 	int i, ret;
 
-	pr_info("%s():paddr for pblk_line_smeta_start()= %llu line=%d\n",__func__, paddr, line->id);
 	memset(&rqd, 0, sizeof(struct nvm_rq));
 
 	ret = pblk_alloc_rqd_meta(pblk, &rqd);
@@ -750,10 +749,8 @@ int pblk_line_smeta_read(struct pblk *pblk, struct pblk_line *line)
 	rqd.nr_ppas = lm->smeta_sec;
 	rqd.is_seq = 1;
 
-	for (i = 0; i < lm->smeta_sec; i++, paddr++) {
-		pr_info("%s():paddr pblk_line_smeta_start()= %llu line=%d\n",__func__, paddr, line->id);
-		rqd.ppa_list[i] = addr_to_gen_ppa(pblk, paddr, line->id);
-	}
+	for (i = 0; i < lm->smeta_sec; i++, paddr++)
+		rqd.ppa_list[i] = addr_to_gen_ppa(pblk, paddr, line->id, -1);
 
 	ret = pblk_submit_io_sync(pblk, &rqd);
 	if (ret) {
@@ -803,12 +800,10 @@ static int pblk_line_smeta_write(struct pblk *pblk, struct pblk_line *line,
 	rqd.nr_ppas = lm->smeta_sec;
 	rqd.is_seq = 1;
 
-	pr_info("%s():in pblk_line_smeta_write paddr = %llu line=%d lm->smeta_sec=%d\n",__func__, paddr, line->id, lm->smeta_sec);
 	for (i = 0; i < lm->smeta_sec; i++, paddr++) {
 		struct pblk_sec_meta *meta = pblk_get_meta(pblk,
 							   rqd.meta_list, i);
-
-		rqd.ppa_list[i] = addr_to_gen_ppa(pblk, paddr, line->id);
+		rqd.ppa_list[i] = addr_to_gen_ppa(pblk, paddr, line->id, -1);
 		meta->lba = lba_list[paddr] = addr_empty;
 	}
 
@@ -850,7 +845,6 @@ int pblk_line_emeta_read(struct pblk *pblk, struct pblk_line *line,
 	int i, j;
 	int ret;
 
-	pr_info("%s(): emeta addr = %llu\n", __func__, paddr);
 	meta_list = nvm_dev_dma_alloc(dev->parent, GFP_KERNEL,
 							&dma_meta_list);
 	if (!meta_list)
@@ -884,7 +878,7 @@ next_rq:
 	rqd.nr_ppas = rq_ppas;
 
 	for (i = 0; i < rqd.nr_ppas; ) {
-		struct ppa_addr ppa = addr_to_gen_ppa(pblk, paddr, line_id);
+		struct ppa_addr ppa = addr_to_gen_ppa(pblk, paddr, line_id, -1);
 		int pos = pblk_ppa_to_pos(geo, ppa);
 
 		if (pblk_io_aligned(pblk, rq_ppas))
@@ -898,8 +892,7 @@ next_rq:
 				goto free_rqd_dma;
 			}
 
-			pr_info("%s():ppa %llu incremented by min = %d for line = %d\n",__func__, ppa.ppa, min, line->id);
-			ppa = addr_to_gen_ppa(pblk, paddr, line_id);
+			ppa = addr_to_gen_ppa(pblk, paddr, line_id, -1);
 			pos = pblk_ppa_to_pos(geo, ppa);
 		}
 
@@ -909,10 +902,8 @@ next_rq:
 			goto free_rqd_dma;
 		}
 
-		for (j = 0; j < min; j++, i++, paddr++) {
-			pr_info("%s(): paddr %llu incremented again for line %d\n", __func__, ppa.ppa, line->id );
-			rqd.ppa_list[i] = addr_to_gen_ppa(pblk, paddr, line_id);
-		}
+		for (j = 0; j < min; j++, i++, paddr++)
+			rqd.ppa_list[i] = addr_to_gen_ppa(pblk, paddr, line_id, -1);
 	}
 
 	ret = pblk_submit_io_sync(pblk, &rqd);
@@ -1224,9 +1215,11 @@ static int pblk_prepare_new_line(struct pblk *pblk, struct pblk_line *line)
 	int blk_to_erase = atomic_read(&line->blk_in_line);
 	int i;
 
+	pr_info("%s():blk_per_line=%d",__func__,lm->blk_per_line);
 	for (i = 0; i < lm->blk_per_line; i++) {
 		struct pblk_lun *rlun = &pblk->luns[i];
 		int pos = pblk_ppa_to_pos(geo, rlun->bppa);
+		pr_info("%s():pos = %d\n",__func__, pos);
 		int state = line->chks[pos].state;
 
 		/* Free chunks should not be erased */
@@ -1246,6 +1239,9 @@ static int pblk_line_prepare(struct pblk *pblk, struct pblk_line *line)
 	int blk_in_line = atomic_read(&line->blk_in_line);
 	int blk_to_erase;
 
+	pr_info("%s():begin line=%d\n",__func__, line->id);
+	pr_info("%s():blk_per_line=%d\n",__func__,lm->blk_per_line);
+
 	/* Bad blocks do not need to be erased */
 	bitmap_copy(line->erase_bitmap, line->blk_bitmap, lm->blk_per_line);
 
@@ -1255,6 +1251,7 @@ static int pblk_line_prepare(struct pblk *pblk, struct pblk_line *line)
 	 * as already erased
 	 */
 	if (line->state == PBLK_LINESTATE_NEW) {
+		pr_info("%s():line=%d is NEW\n",__func__,line->id);
 		blk_to_erase = pblk_prepare_new_line(pblk, line);
 		line->state = PBLK_LINESTATE_FREE;
 		trace_pblk_line_state(pblk_disk_name(pblk), line->id,
@@ -1356,6 +1353,7 @@ void pblk_line_free(struct pblk_line *line)
 	mempool_free(line->map_bitmap, l_mg->bitmap_pool);
 	mempool_free(line->invalid_bitmap, l_mg->bitmap_pool);
 
+	pr_info("%s():line %d\n",__func__, line->id);
 	pblk_line_reinit(line);
 }
 
@@ -1389,9 +1387,11 @@ retry:
 		list_add_tail(&line->list, &l_mg->bad_list);
 
 		pblk_debug(pblk, "line %d is bad\n", line->id);
+		pr_info("%s():line is bad\n",__func__);
 		goto retry;
 	}
 
+	pr_info("%s():preparing line %d\n", __func__, line->id);
 	ret = pblk_line_prepare(pblk, line);
 	if (ret) {
 		switch (ret) {
@@ -1400,6 +1400,7 @@ retry:
 			goto retry;
 		case -EINTR:
 			list_add(&line->list, &l_mg->corrupt_list);
+			pr_info("%s():received eintr\n",__func__);
 			goto retry;
 		default:
 			pblk_err(pblk, "failed to prepare line %d\n", line->id);
@@ -1704,6 +1705,7 @@ static void __pblk_line_put(struct pblk *pblk, struct pblk_line *line)
 	struct pblk_line_mgmt *l_mg = &pblk->l_mg;
 	struct pblk_gc *gc = &pblk->gc;
 
+	pr_info("%s():line %d\n",__func__, line->id);
 	spin_lock(&line->lock);
 	WARN_ON(line->state != PBLK_LINESTATE_GC);
 	line->state = PBLK_LINESTATE_FREE;
@@ -1807,17 +1809,28 @@ struct pblk_line *pblk_line_get_erase(struct pblk *pblk)
 	return pblk->l_mg.data_next;
 }
 
-int pblk_line_is_full(struct pblk_line *line)
+int pblk_line_is_full(struct pblk_line *line, struct pblk *pblk)
 {
 	int i;
+	u64 paddr;
+	int nr_secs;		
+	
 	if (line->left_msecs == 0) {
-		pr_info("%s():cur_sec=%d\n",__func__,line->cur_sec);
+		pr_info("%s():cur_sec=%d line=%d\n",__func__,line->cur_sec, line->id);
 		line->cur_sec = 16344;
 		return 1;
 	}
 	for (i = 0 ; i < 4 ; i++) {
-		if(line->cur_secs[i] >= 4095) {
-			pr_info("%s():readjusting cur_sec to 16344\n",__func__);
+		if(line->cur_secs[i] >= 4063) {
+			nr_secs = 16344 - line->cur_sec;
+			if(nr_secs > 0) {
+				paddr = pblk_alloc_page(pblk, line, nr_secs);
+				while(nr_secs > 0) {
+					__pblk_map_invalidate(pblk, line, paddr++);
+					nr_secs--;
+				}
+			}
+			pr_info("%s():cur_sec = %d left_msecs = %d line=%d\n",__func__, line->cur_sec, line->left_msecs, line->id);
 			line->cur_sec = 16344;
 			line->left_msecs = 0;
 			return 1;
@@ -2090,8 +2103,11 @@ int pblk_update_map_gc(struct pblk *pblk, sector_t lba, struct ppa_addr ppa_new,
 
 	spin_lock(&pblk->trans_lock);
 	ppa_l2p = pblk_trans_map_get(pblk, lba);
-	pr_info("%s(): updating paddr_gc %llu\n",__func__, paddr_gc);
-	ppa_gc = addr_to_gen_ppa(pblk, paddr_gc, gc_line->id);
+	// paddr_gc address should already be mapped i.e.
+	// it should exist in p2lmap, from which we can get its PU
+	// and get the corresponding ppa_adjusted value from
+	// ppa_original_adjusted mapping
+	ppa_gc = addr_to_gen_ppa(pblk, paddr_gc, gc_line->id, -2);
 
 	if (!pblk_ppa_comp(ppa_l2p, ppa_gc)) {
 		spin_lock(&gc_line->lock);

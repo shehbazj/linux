@@ -409,8 +409,11 @@ int pblk_submit_meta_io(struct pblk *pblk, struct pblk_line *meta_line)
 		spin_lock(&meta_line->lock);
 		paddr = __pblk_alloc_page(pblk, meta_line, rq_ppas);
 		spin_unlock(&meta_line->lock);
-		for (j = 0; j < rq_ppas; j++, i++, paddr++)
-			ppa_list[i] = addr_to_gen_ppa(pblk, paddr, id);
+		for (j = 0; j < rq_ppas; j++, i++, paddr++) {
+			// this always writes to offsets from 4080-4095
+			// hence the ppa will not be adjusted here.
+			ppa_list[i] = addr_to_gen_ppa(pblk, paddr, id, -1);
+		}
 	}
 
 	spin_lock(&l_mg->close_lock);
@@ -464,8 +467,8 @@ static inline bool pblk_valid_meta_ppa(struct pblk *pblk,
 	 * optimal in the right direction.
 	 */
 	paddr = pblk_lookup_page(pblk, meta_line);
-	ppa = addr_to_gen_ppa(pblk, paddr, 0);
-	ppa_opt = addr_to_gen_ppa(pblk, paddr + data_line->meta_distance, 0);
+	ppa = addr_to_gen_ppa(pblk, paddr, 0, -4);
+	ppa_opt = addr_to_gen_ppa(pblk, paddr + data_line->meta_distance, 0, -4);
 	pos_opt = pblk_ppa_to_pos(geo, ppa_opt);
 
 	if (test_bit(pos_opt, data_c_ctx->lun_bitmap) ||

@@ -353,6 +353,7 @@ enum {
 #define EMETA_VERSION_MAJOR (0)
 #define EMETA_VERSION_MINOR (2)
 
+// size = 32
 struct line_header {
 	__le32 crc;
 	__le32 identifier;	/* pblk identifier */
@@ -363,6 +364,7 @@ struct line_header {
 	__le32 id;		/* line id for current line */
 };
 
+// size = 32 + 36 = 58
 struct line_smeta {
 	struct line_header header;
 
@@ -381,7 +383,6 @@ struct line_smeta {
 	__le64 lun_bitmap[];
 };
 
-
 /*
  * Metadata layout in media:
  *	First sector:
@@ -393,6 +394,7 @@ struct line_smeta {
  *	Last sectors (start at vsc_sector):
  *		4. u32 valid sector count (vsc) for all lines (~0U: free line)
  */
+// size = 32 + 48 = 80
 struct line_emeta {
 	struct line_header header;
 
@@ -705,7 +707,7 @@ struct pblk {
 	/* contains mapping of LBA to PUs */
 	u32 *lba_pu_map;
 	/* contains mapping of ppa_original to ppa_adjusted*/
-	u32 *ppa_original_adjusted;
+	int *ppa_original_adjusted;
 
 	spinlock_t trans_lock;
 
@@ -825,7 +827,7 @@ void pblk_line_recov_close(struct pblk *pblk, struct pblk_line *line);
 struct pblk_line *pblk_line_get_data(struct pblk *pblk);
 struct pblk_line *pblk_line_get_erase(struct pblk *pblk);
 int pblk_line_erase(struct pblk *pblk, struct pblk_line *line);
-int pblk_line_is_full(struct pblk_line *line);
+int pblk_line_is_full(struct pblk_line *line, struct pblk *pblk);
 void pblk_line_free(struct pblk_line *line);
 void pblk_line_close_meta(struct pblk *pblk, struct pblk_line *line);
 void pblk_line_close(struct pblk *pblk, struct pblk_line *line);
@@ -1044,19 +1046,39 @@ static int ppa_linear_offset(struct pblk *pblk, struct ppa_addr ppa)
 	return ppa_off;
 }
 
+/* -1 = smeta or emeta. do not convert ppa_original to ppa_adjusted
+   -2 = non meta. do not know the lba mapping
+   -3 = non meta. assumes lba->PU and ppa_original ppa_adjusted mapping exists already
+   -4 = unknown
+    N = data. mapping of LBA is available beforehand
+
+    smeta_start smeta_end values are calculated based on size of struct smeta per PU
+    emeta_start emeta_end values are also calculated based on size of struct emeta per PU
+*/
 static inline struct ppa_addr addr_to_gen_ppa(struct pblk *pblk, u64 paddr,
-					      u64 line_id)
+					      u64 line_id, int lba_num)
 {
 	struct nvm_tgt_dev *dev = pblk->dev;
 	struct nvm_geo *geo = &dev->geo;
 
-	u32 * ppa_original_adjusted_map = pblk->ppa_original_adjusted;
-	__le64 addr_empty = cpu_to_le64(ADDR_EMPTY);
+	int * ppa_original_adjusted_map = pblk->ppa_original_adjusted;
 
 	// ppa_original is the ppa that we get based on original computations.
 	// ppa_adjusted is the new ppa that we assign based on LBA access frequency.
 	struct ppa_addr ppa, ppa_original, ppa_adjusted;
 	int ppa_original_linear_off, ppa_adjusted_linear_off;
+	int pu_no=0;
+
+	int num_sec = geo->total_secs;
+	int num_luns = geo->all_luns;
+	int chk_size = geo->clba;
+	int num_lines = num_sec / (chk_size * num_luns);
+	int secs_in_line = num_sec / num_lines;
+	int secs_in_chk  = secs_in_line / num_luns;
+
+	u32 *lba_pu_map = (u32 *)pblk->lba_pu_map;
+
+	struct pblk_line cur_line = pblk->lines[line_id];
 
 	if (geo->version == NVM_OCSSD_SPEC_12) {
 		struct nvm_addrf_12 *ppaf = (struct nvm_addrf_12 *)&pblk->addrf;
@@ -1073,7 +1095,6 @@ static inline struct ppa_addr addr_to_gen_ppa(struct pblk *pblk, u64 paddr,
 		int secs, chnls, luns;
 
 		ppa_original.ppa = 0;
-		// line_id remains the same.
 		ppa_original.m.chk = line_id;
 
 		paddr = div_u64_rem(paddr, uaddrf->sec_stripe, &secs);
@@ -1086,16 +1107,64 @@ static inline struct ppa_addr addr_to_gen_ppa(struct pblk *pblk, u64 paddr,
 		ppa_original.m.pu = luns;
 
 		ppa_original.m.sec += uaddrf->sec_stripe * paddr;
-		/*
-		ppa_original_linear_off = ppa_linear_offset(pblk,ppa);
-		if(ppa_original_adjusted_map[ppa_original_linear_off] == ADDR_EMPTY) {
-			// create a new adjusted mapping for ppa_original
-		}else {
-			// mapping exists already. return already mapped ppa_original
-		}
-		*/
-	}
 
+		if(  ppa_original.m.sec >=0  && ppa_original.m.sec < 20) { // smeta_sec
+			return ppa_original;
+		}
+		else if(ppa_original.m.sec >= 4064 && ppa_original.m.sec < 4096) { // emeta_sec
+			return ppa_original;
+		}
+		else { // data sec. could be new mapping or existing mapping.
+			ppa_original_linear_off = ppa_linear_offset(pblk,ppa_original);
+			if(ppa_original_adjusted_map[ppa_original_linear_off] == ADDR_EMPTY) {
+				// create a new adjusted mapping for ppa_original
+				if(lba_num < 0) {
+					pr_info("%s():Could not map. received PU %d\n",__func__, lba_num);
+					return ppa_original;
+				}else {
+					ppa_adjusted.ppa = 0;
+					ppa_adjusted.m.chk = ppa_original.m.chk;
+					pu_no = lba_pu_map[lba_num];
+					// new sec is the curr sec.
+					// since ppa_original->adjusted mapping does not exist, 
+					// this original ppa has not been mapped yet. so we need
+					// to create its mapping by incrementing cur_sec.
+					ppa_adjusted.m.sec = cur_line.cur_secs[pu_no];
+					cur_line.cur_secs[pu_no]++;
+					ppa_adjusted.m.grp = ppa_original.m.grp;
+					// new pu
+					ppa_adjusted.m.pu = pu_no;
+					if(cur_line.cur_secs[pu_no] >= 4096) {
+						pr_info("%s(): warn:: line %llu pu %d\n", __func__, line_id, pu_no);
+	//pr_info("%s():sec=%d grp=%d pu=%d\n", __func__, ppa_original.m.sec, ppa_original.m.grp, ppa_adjusted.m.pu);
+					}
+					ppa_adjusted_linear_off = ppa_linear_offset(pblk, ppa_adjusted);
+					ppa_original_adjusted_map[ppa_original_linear_off] = ppa_adjusted_linear_off;
+					return ppa_adjusted;
+				}
+			}else {
+				// TODO
+				// mapping exists already. return already mapped ppa_original
+					ppa_adjusted_linear_off = ppa_original_adjusted_map[ppa_original_linear_off];
+					ppa_adjusted.ppa = 0;
+					ppa_adjusted.m.grp = 0;
+					ppa_adjusted.m.chk = ppa_adjusted_linear_off/secs_in_line;
+					ppa_adjusted.m.sec  = ppa_adjusted_linear_off%secs_in_chk;
+					ppa_adjusted.m.pu  = (ppa_adjusted_linear_off%secs_in_line)/secs_in_chk;
+				//	pr_info("%s(): warn::\n", __func__);
+					pr_info("%s():grp %d %d\n",__func__,ppa_adjusted.m.grp, ppa_original.m.grp);
+					pr_info("%s():chk %d %d\n",__func__,ppa_adjusted.m.chk, ppa_original.m.chk);
+					pr_info("%s():sec %d %d\n",__func__,ppa_adjusted.m.sec, ppa_original.m.sec);
+					pr_info("%s():pu  %d %d\n",__func__,ppa_adjusted.m.pu, ppa_original.m.pu);
+					return ppa_adjusted;
+				//	return ppa_original;
+			}
+		}
+		if(lba_num == -1) { // control should not reach here for smeta/emeta ppa
+			pr_info("%s():unexpected ppa with meta PU -1 pu = %d\n", __func__, ppa_original.m.sec);
+			BUG();
+		}
+	}
 	return ppa_original;
 }
 
@@ -1184,7 +1253,7 @@ static inline struct ppa_addr pblk_trans_map_get(struct pblk *pblk,
 /* for now, map each lba to different PUs */
 static inline void pblk_lba_pu_map_set(struct pblk *pblk, sector_t lba)
 {
-	pblk->lba_pu_map[lba] = lba % 4;
+	pblk->lba_pu_map[lba] = (lba+1) % 4;
 }
 
 

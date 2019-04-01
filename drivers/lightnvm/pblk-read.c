@@ -535,7 +535,8 @@ static int read_ppalist_rq_gc(struct pblk *pblk, struct nvm_rq *rqd,
 		if (lba_list[i] == ADDR_EMPTY)
 			continue;
 
-		ppa_gc = addr_to_gen_ppa(pblk, paddr_list_gc[i], line->id);
+		// this should have a ppa_original_adjusted mapping already
+		ppa_gc = addr_to_gen_ppa(pblk, paddr_list_gc[i], line->id, -3);
 		if (!pblk_ppa_comp(ppa_list_l2p[i], ppa_gc)) {
 			paddr_list_gc[i] = lba_list[i] = ADDR_EMPTY;
 			continue;
@@ -571,7 +572,8 @@ static int read_rq_gc(struct pblk *pblk, struct nvm_rq *rqd,
 	ppa_l2p = pblk_trans_map_get(pblk, lba);
 	spin_unlock(&pblk->trans_lock);
 
-	ppa_gc = addr_to_gen_ppa(pblk, paddr_gc, line->id);
+	// this should have a ppa_original_adjusted mapping already
+	ppa_gc = addr_to_gen_ppa(pblk, paddr_gc, line->id, -3);
 	if (!pblk_ppa_comp(ppa_l2p, ppa_gc))
 		goto out;
 
