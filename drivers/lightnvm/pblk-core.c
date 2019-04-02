@@ -750,7 +750,7 @@ int pblk_line_smeta_read(struct pblk *pblk, struct pblk_line *line)
 	rqd.is_seq = 1;
 
 	for (i = 0; i < lm->smeta_sec; i++, paddr++)
-		rqd.ppa_list[i] = addr_to_gen_ppa(pblk, paddr, line->id, -1);
+		rqd.ppa_list[i] = addr_to_gen_ppa(pblk, paddr, line->id, -11);
 
 	ret = pblk_submit_io_sync(pblk, &rqd);
 	if (ret) {
@@ -803,7 +803,7 @@ static int pblk_line_smeta_write(struct pblk *pblk, struct pblk_line *line,
 	for (i = 0; i < lm->smeta_sec; i++, paddr++) {
 		struct pblk_sec_meta *meta = pblk_get_meta(pblk,
 							   rqd.meta_list, i);
-		rqd.ppa_list[i] = addr_to_gen_ppa(pblk, paddr, line->id, -1);
+		rqd.ppa_list[i] = addr_to_gen_ppa(pblk, paddr, line->id, -12);
 		meta->lba = lba_list[paddr] = addr_empty;
 	}
 
@@ -878,7 +878,7 @@ next_rq:
 	rqd.nr_ppas = rq_ppas;
 
 	for (i = 0; i < rqd.nr_ppas; ) {
-		struct ppa_addr ppa = addr_to_gen_ppa(pblk, paddr, line_id, -1);
+		struct ppa_addr ppa = addr_to_gen_ppa(pblk, paddr, line_id, -13);
 		int pos = pblk_ppa_to_pos(geo, ppa);
 
 		if (pblk_io_aligned(pblk, rq_ppas))
@@ -892,7 +892,7 @@ next_rq:
 				goto free_rqd_dma;
 			}
 
-			ppa = addr_to_gen_ppa(pblk, paddr, line_id, -1);
+			ppa = addr_to_gen_ppa(pblk, paddr, line_id, -14);
 			pos = pblk_ppa_to_pos(geo, ppa);
 		}
 
@@ -903,7 +903,7 @@ next_rq:
 		}
 
 		for (j = 0; j < min; j++, i++, paddr++)
-			rqd.ppa_list[i] = addr_to_gen_ppa(pblk, paddr, line_id, -1);
+			rqd.ppa_list[i] = addr_to_gen_ppa(pblk, paddr, line_id, -15);
 	}
 
 	ret = pblk_submit_io_sync(pblk, &rqd);
@@ -1215,11 +1215,9 @@ static int pblk_prepare_new_line(struct pblk *pblk, struct pblk_line *line)
 	int blk_to_erase = atomic_read(&line->blk_in_line);
 	int i;
 
-	pr_info("%s():blk_per_line=%d",__func__,lm->blk_per_line);
 	for (i = 0; i < lm->blk_per_line; i++) {
 		struct pblk_lun *rlun = &pblk->luns[i];
 		int pos = pblk_ppa_to_pos(geo, rlun->bppa);
-		pr_info("%s():pos = %d\n",__func__, pos);
 		int state = line->chks[pos].state;
 
 		/* Free chunks should not be erased */
@@ -1239,19 +1237,14 @@ static int pblk_line_prepare(struct pblk *pblk, struct pblk_line *line)
 	int blk_in_line = atomic_read(&line->blk_in_line);
 	int blk_to_erase;
 
-	pr_info("%s():begin line=%d\n",__func__, line->id);
-	pr_info("%s():blk_per_line=%d\n",__func__,lm->blk_per_line);
-
 	/* Bad blocks do not need to be erased */
 	bitmap_copy(line->erase_bitmap, line->blk_bitmap, lm->blk_per_line);
 
 	spin_lock(&line->lock);
-
 	/* If we have not written to this line, we need to mark up free chunks
 	 * as already erased
 	 */
 	if (line->state == PBLK_LINESTATE_NEW) {
-		pr_info("%s():line=%d is NEW\n",__func__,line->id);
 		blk_to_erase = pblk_prepare_new_line(pblk, line);
 		line->state = PBLK_LINESTATE_FREE;
 		trace_pblk_line_state(pblk_disk_name(pblk), line->id,
@@ -1353,7 +1346,6 @@ void pblk_line_free(struct pblk_line *line)
 	mempool_free(line->map_bitmap, l_mg->bitmap_pool);
 	mempool_free(line->invalid_bitmap, l_mg->bitmap_pool);
 
-	pr_info("%s():line %d\n",__func__, line->id);
 	pblk_line_reinit(line);
 }
 
@@ -1387,11 +1379,9 @@ retry:
 		list_add_tail(&line->list, &l_mg->bad_list);
 
 		pblk_debug(pblk, "line %d is bad\n", line->id);
-		pr_info("%s():line is bad\n",__func__);
 		goto retry;
 	}
 
-	pr_info("%s():preparing line %d\n", __func__, line->id);
 	ret = pblk_line_prepare(pblk, line);
 	if (ret) {
 		switch (ret) {
@@ -1400,7 +1390,6 @@ retry:
 			goto retry;
 		case -EINTR:
 			list_add(&line->list, &l_mg->corrupt_list);
-			pr_info("%s():received eintr\n",__func__);
 			goto retry;
 		default:
 			pblk_err(pblk, "failed to prepare line %d\n", line->id);
@@ -1705,7 +1694,6 @@ static void __pblk_line_put(struct pblk *pblk, struct pblk_line *line)
 	struct pblk_line_mgmt *l_mg = &pblk->l_mg;
 	struct pblk_gc *gc = &pblk->gc;
 
-	pr_info("%s():line %d\n",__func__, line->id);
 	spin_lock(&line->lock);
 	WARN_ON(line->state != PBLK_LINESTATE_GC);
 	line->state = PBLK_LINESTATE_FREE;
@@ -1813,15 +1801,14 @@ int pblk_line_is_full(struct pblk_line *line, struct pblk *pblk)
 {
 	int i;
 	u64 paddr;
-	int nr_secs;		
-	
+	int nr_secs;
+
 	if (line->left_msecs == 0) {
-		pr_info("%s():cur_sec=%d line=%d\n",__func__,line->cur_sec, line->id);
 		line->cur_sec = 16344;
 		return 1;
 	}
 	for (i = 0 ; i < 4 ; i++) {
-		if(line->cur_secs[i] >= 4063) {
+		if(line->cur_secs[i] >= 4064) {
 			nr_secs = 16344 - line->cur_sec;
 			if(nr_secs > 0) {
 				paddr = pblk_alloc_page(pblk, line, nr_secs);

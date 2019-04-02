@@ -412,7 +412,7 @@ int pblk_submit_meta_io(struct pblk *pblk, struct pblk_line *meta_line)
 		for (j = 0; j < rq_ppas; j++, i++, paddr++) {
 			// this always writes to offsets from 4080-4095
 			// hence the ppa will not be adjusted here.
-			ppa_list[i] = addr_to_gen_ppa(pblk, paddr, id, -1);
+			ppa_list[i] = addr_to_gen_ppa(pblk, paddr, id, -17);
 		}
 	}
 

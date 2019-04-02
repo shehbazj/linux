@@ -1120,6 +1120,7 @@ static inline struct ppa_addr addr_to_gen_ppa(struct pblk *pblk, u64 paddr,
 				// create a new adjusted mapping for ppa_original
 				if(lba_num < 0) {
 					pr_info("%s():Could not map. received PU %d\n",__func__, lba_num);
+					pr_info("%s():chk=%llu, sec=%d, grp=%d, pu=%d\n",__func__,line_id, ppa_original.m.sec , ppa_original.m.grp , ppa_original.m.pu);
 					return ppa_original;
 				}else {
 					ppa_adjusted.ppa = 0;
@@ -1143,7 +1144,6 @@ static inline struct ppa_addr addr_to_gen_ppa(struct pblk *pblk, u64 paddr,
 					return ppa_adjusted;
 				}
 			}else {
-				// TODO
 				// mapping exists already. return already mapped ppa_original
 					ppa_adjusted_linear_off = ppa_original_adjusted_map[ppa_original_linear_off];
 					ppa_adjusted.ppa = 0;
@@ -1151,11 +1151,6 @@ static inline struct ppa_addr addr_to_gen_ppa(struct pblk *pblk, u64 paddr,
 					ppa_adjusted.m.chk = ppa_adjusted_linear_off/secs_in_line;
 					ppa_adjusted.m.sec  = ppa_adjusted_linear_off%secs_in_chk;
 					ppa_adjusted.m.pu  = (ppa_adjusted_linear_off%secs_in_line)/secs_in_chk;
-				//	pr_info("%s(): warn::\n", __func__);
-					pr_info("%s():grp %d %d\n",__func__,ppa_adjusted.m.grp, ppa_original.m.grp);
-					pr_info("%s():chk %d %d\n",__func__,ppa_adjusted.m.chk, ppa_original.m.chk);
-					pr_info("%s():sec %d %d\n",__func__,ppa_adjusted.m.sec, ppa_original.m.sec);
-					pr_info("%s():pu  %d %d\n",__func__,ppa_adjusted.m.pu, ppa_original.m.pu);
 					return ppa_adjusted;
 				//	return ppa_original;
 			}
