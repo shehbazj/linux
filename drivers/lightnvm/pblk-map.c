@@ -19,6 +19,33 @@
 
 #include "pblk.h"
 
+static void pblk_fill_holes(struct pblk *pblk, struct pblk_line *line, struct ppa_addr start_addr, unsigned long *lun_bitmap)
+{
+	int i;
+	u64 paddr;
+	int nr_secs;
+		
+	for (i = 0 ; i < 4 ; i++) {
+		if(line->cur_secs[i] >= 4064) {
+			nr_secs = 16344 - line->cur_sec;
+			if(nr_secs > 0) {
+				pr_info("%s():line %d nr_secs %d\n",__func__, line->id, nr_secs);
+				paddr = pblk_alloc_page(pblk, line, nr_secs);
+				while(nr_secs > 0) {
+					pr_info("%s():line %d nr_secs %d paddr %d\n",__func__, line->id, nr_secs, paddr);
+					__pblk_map_invalidate(pblk, line, paddr++);	
+					nr_secs--;
+				}
+				pblk_down_rq(pblk,start_addr, lun_bitmap);
+			}
+			pr_info("%s():cur_sec = %d left_msecs = %d line=%d\n",__func__, line->cur_sec, line->left_msecs, line->id);
+			line->cur_sec = 16344;
+			line->left_msecs = 0;
+			return;
+		}
+	}
+}
+
 static int pblk_map_page_data(struct pblk *pblk, unsigned int sentry,
 			      struct ppa_addr *ppa_list,
 			      unsigned long *lun_bitmap,
@@ -37,6 +64,7 @@ static int pblk_map_page_data(struct pblk *pblk, unsigned int sentry,
 		return -ENOSPC;
 
 	if (pblk_line_is_full(line, pblk)) {
+		pblk_fill_holes(pblk, line, ppa_list[0], lun_bitmap);
 		struct pblk_line *prev_line = line;
 
 		/* If we cannot allocate a new line, make sure to store metadata
@@ -186,6 +214,7 @@ int pblk_map_erase_rq(struct pblk *pblk, struct nvm_rq *rqd,
 		int bit = -1;
 
 retry:
+		pr_info("%s():retry finding next bit\n",__func__);
 		bit = find_next_bit(d_line->blk_bitmap,
 						lm->blk_per_line, bit + 1);
 		if (bit >= lm->blk_per_line)

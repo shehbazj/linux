@@ -91,18 +91,21 @@ static void __pblk_end_io_erase(struct pblk *pblk, struct nvm_rq *rqd)
 	atomic_dec(&line->left_seblks);
 
 	if (rqd->error) {
+		pr_info("%s():received error\n",__func__);
 		trace_pblk_chunk_reset(pblk_disk_name(pblk),
 				&rqd->ppa_addr, PBLK_CHUNK_RESET_FAILED);
 
 		chunk->state = NVM_CHK_ST_OFFLINE;
 		pblk_mark_bb(pblk, line, rqd->ppa_addr);
 	} else {
+		pr_info("%s():no error, reset chunk as FREE\n",__func__);
 		trace_pblk_chunk_reset(pblk_disk_name(pblk),
 				&rqd->ppa_addr, PBLK_CHUNK_RESET_DONE);
 
 		chunk->state = NVM_CHK_ST_FREE;
 	}
 
+	pr_info("%s():chunk state is now %d\n",__func__, chunk->state);
 	trace_pblk_chunk_state(pblk_disk_name(pblk), &rqd->ppa_addr,
 				chunk->state);
 
@@ -114,6 +117,7 @@ static void pblk_end_io_erase(struct nvm_rq *rqd)
 {
 	struct pblk *pblk = rqd->private;
 
+	pr_info("%s():\n",__func__);
 	__pblk_end_io_erase(pblk, rqd);
 	mempool_free(rqd, &pblk->e_rq_pool);
 }
@@ -175,7 +179,7 @@ void __pblk_map_invalidate(struct pblk *pblk, struct pblk_line *line,
 	WARN_ON(line->state == PBLK_LINESTATE_FREE);
 
 	if (test_and_set_bit(paddr, line->invalid_bitmap)) {
-		WARN_ONCE(1, "pblk: double invalidate\n");
+		WARN_ONCE(1, "pblk: double invalidate line %d paddr %u\n",line->id, paddr);
 		spin_unlock(&line->lock);
 		return;
 	}
@@ -530,12 +534,18 @@ void pblk_check_chunk_state_update(struct pblk *pblk, struct nvm_rq *rqd)
 		struct nvm_chk_meta *chunk = pblk_dev_ppa_to_chunk(pblk, *ppa);
 		u64 caddr = pblk_dev_ppa_to_chunk_addr(pblk, *ppa);
 
-		if (caddr == 0)
+		if (caddr == 0) {
+			pr_info("%s():caddr is 0\n",__func__);
 			trace_pblk_chunk_state(pblk_disk_name(pblk),
 							ppa, NVM_CHK_ST_OPEN);
-		else if (caddr == (chunk->cnlb - 1))
+		}
+		else if (caddr == (chunk->cnlb - 1)) {
+			pr_info("%s():caddr is equal to cnlb-1 %llu\n",__func__, caddr);
 			trace_pblk_chunk_state(pblk_disk_name(pblk),
 							ppa, NVM_CHK_ST_CLOSED);
+		}else {
+			pr_info("%s():caddr is %llu\n",__func__, caddr);
+		}
 	}
 }
 
@@ -547,15 +557,19 @@ int pblk_submit_io_sync(struct pblk *pblk, struct nvm_rq *rqd)
 	atomic_inc(&pblk->inflight_io);
 
 #ifdef CONFIG_NVM_PBLK_DEBUG
-	if (pblk_check_io(pblk, rqd))
+	if (pblk_check_io(pblk, rqd)) {
+		pr_info("%s():returning I/O error\n",__func__);
 		return NVM_IO_ERR;
+	}
 #endif
 
 	ret = nvm_submit_io_sync(dev, rqd);
 
 	if (trace_pblk_chunk_state_enabled() && !ret &&
-	    rqd->opcode == NVM_OP_PWRITE)
+	    rqd->opcode == NVM_OP_PWRITE) {
+		pr_info("%s():chunk state updated\n",__func__);
 		pblk_check_chunk_state_update(pblk, rqd);
+	}
 
 	return ret;
 }
@@ -953,6 +967,7 @@ static int pblk_blk_erase_sync(struct pblk *pblk, struct ppa_addr ppa)
 	 */
 	ret = pblk_submit_io_sync(pblk, &rqd);
 	rqd.private = pblk;
+	pr_info("%s():\n",__func__);
 	__pblk_end_io_erase(pblk, &rqd);
 
 	return ret;
@@ -964,16 +979,19 @@ int pblk_line_erase(struct pblk *pblk, struct pblk_line *line)
 	struct ppa_addr ppa;
 	int ret, bit = -1;
 
+	pr_info("%s():erasing line %d\n",__func__, line->id);
 	/* Erase only good blocks, one at a time */
 	do {
 		spin_lock(&line->lock);
 		bit = find_next_zero_bit(line->erase_bitmap, lm->blk_per_line,
 								bit + 1);
 		if (bit >= lm->blk_per_line) {
+			pr_info("%s():line %d didnt find bit to erase %d\n",__func__, line->id, bit);
 			spin_unlock(&line->lock);
 			break;
 		}
 
+		pr_info("%s():line %d found block %d to erase\n",__func__, line->id, bit);
 		ppa = pblk->luns[bit].bppa; /* set ch and lun */
 		ppa.a.blk = line->id;
 
@@ -1624,8 +1642,10 @@ struct pblk_line *pblk_line_replace_data(struct pblk *pblk)
 	unsigned int left_seblks;
 
 	new = l_mg->data_next;
-	if (!new)
+	if (!new) {
+		pr_info("%s():could not get data_next\n",__func__);
 		goto out;
+	}
 
 	spin_lock(&l_mg->free_lock);
 	cur = l_mg->data_line;
@@ -1639,19 +1659,25 @@ retry_erase:
 	if (left_seblks) {
 		/* If line is not fully erased, erase it */
 		if (atomic_read(&new->left_eblks)) {
-			if (pblk_line_erase(pblk, new))
+			pr_info("%s():line %d eblks are left %d\n",__func__, new->id, atomic_read(&new->left_eblks));
+			if (pblk_line_erase(pblk, new)) {
+				pr_info("%s():line %d erase failed\n",__func__, new->id);
 				goto out;
+			}
 		} else {
 			io_schedule();
 		}
 		goto retry_erase;
 	}
 
-	if (pblk_line_alloc_bitmaps(pblk, new))
+	if (pblk_line_alloc_bitmaps(pblk, new)) {
+		pr_info("%s():line %d alloc bitmap failed, null\n",__func__, new->id);
 		return NULL;
+	}
 
 retry_setup:
 	if (!pblk_line_init_metadata(pblk, new, cur)) {
+		pr_info("%s():line %d init meta failed\n",__func__, new->id);
 		new = pblk_line_retry(pblk, new);
 		if (!new)
 			goto out;
@@ -1659,13 +1685,17 @@ retry_setup:
 		goto retry_setup;
 	}
 
+	pr_info("%s():line %d init metadata successful\n",__func__, new->id);
 	if (!pblk_line_init_bb(pblk, new, 1)) {
 		new = pblk_line_retry(pblk, new);
-		if (!new)
+		if (!new) {
+			pr_info("%s():line %d retry failed \n", __func__, new->id);
 			goto out;
+		}
 
 		goto retry_setup;
 	}
+	pr_info("%s():line %d init bb successful\n",__func__, new->id);
 
 	pblk_rl_free_lines_dec(&pblk->rl, new, true);
 
@@ -1677,14 +1707,17 @@ retry_setup:
 		 * Only allow as many writes in as we can store safely and then
 		 * fail gracefully
 		 */
+		pr_info("%s():line %d assigning next data line failed \n", __func__, new->id);
 		pblk_stop_writes(pblk, new);
 		l_mg->data_next = NULL;
 	} else {
+		pr_info("%s():new line assigned %d\n",__func__, l_mg->data_next->id);
 		l_mg->data_next->seq_nr = l_mg->d_seq_nr++;
 		l_mg->data_next->type = PBLK_LINETYPE_DATA;
 	}
 	spin_unlock(&l_mg->free_lock);
 
+	pr_info("%s():replace end\n",__func__);
 out:
 	return new;
 }
@@ -1760,6 +1793,7 @@ int pblk_blk_erase_async(struct pblk *pblk, struct ppa_addr ppa)
 	struct nvm_rq *rqd;
 	int err;
 
+	pr_info("%s():\n",__func__);
 	rqd = pblk_alloc_rqd(pblk, PBLK_ERASE);
 
 	pblk_setup_e_rq(pblk, rqd, ppa);
@@ -1809,17 +1843,6 @@ int pblk_line_is_full(struct pblk_line *line, struct pblk *pblk)
 	}
 	for (i = 0 ; i < 4 ; i++) {
 		if(line->cur_secs[i] >= 4064) {
-			nr_secs = 16344 - line->cur_sec;
-			if(nr_secs > 0) {
-				paddr = pblk_alloc_page(pblk, line, nr_secs);
-				while(nr_secs > 0) {
-					__pblk_map_invalidate(pblk, line, paddr++);
-					nr_secs--;
-				}
-			}
-			pr_info("%s():cur_sec = %d left_msecs = %d line=%d\n",__func__, line->cur_sec, line->left_msecs, line->id);
-			line->cur_sec = 16344;
-			line->left_msecs = 0;
 			return 1;
 		}
 	}
